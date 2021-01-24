@@ -1,0 +1,6 @@
+{
+	"files.associations": {
+        "dm-zoned.h": "c",
+        "stdio.h": "c"
+    }
+}

@@ -1,0 +1,10 @@
+/dev/sdb: 41943040 512-byte sectors (20 GiB)
+  Host-managed device
+  80 zones, offset 0
+  80 zones of 524288 512-byte sectors (256 MiB)
+  65536 4KB data blocks per zone
+***
+
+zone_nr_blocks: 65536 zone_nr_bitmap_blocks: 2 total: a0 
+
+***sdb: starting dmz-sdb uuid 7209a9e7-280b-4e91-8d40-646a74ce21dc

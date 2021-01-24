@@ -1,0 +1,32 @@
+{
+	"configurations": [
+		{
+			"name": "driver",
+			"defines": ["KBUILD_MODNAME", "__KERNEL__", "MODULE"],
+			"compilerPath": "/usr/bin/gcc",
+			"cStandard": "${default}",
+			"cppStandard": "${default}",
+			"intelliSenseMode": "${default}",
+			"includePath": [
+				"/usr/include/**",
+				"/usr/lib/gcc/x86_64-linux-gnu/9/include",
+				"/usr/lib/modules/5.9.0/build/**",
+				"/usr/lib/modules/5.9.0/build/arch/x86/include",
+				"/usr/lib/modules/5.9.0/build/arch/x86/include/generated",
+				"/usr/lib/modules/5.9.0/build/arch/x86/include/uapi",
+				"/usr/lib/modules/5.9.0/build/arch/x86/include/generated/uapi",
+				"/usr/lib/modules/5.9.0/build/include",
+				"/usr/lib/modules/5.9.0/build/include/uapi",
+				"/usr/lib/modules/5.9.0/build/include/generated/uapi"
+			],
+			"compilerArgs": [
+				"-nostdinc",
+				"-include",
+				"/usr/lib/modules/5.9.0/build/include/linux/kconfig.h",
+				"-include",
+				"/usr/lib/modules/5.9.0/build/include/linux/compiler_types.h"
+			]
+		}
+	],
+	"version": 4
+}

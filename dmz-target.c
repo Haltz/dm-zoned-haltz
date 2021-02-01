@@ -130,13 +130,13 @@ static void dmz_dtr(struct dm_target *ti) {
 
 	dmz_dtr_metadata(dmz->zmd);
 	if (dmz->ddev) {
-		kfree(dmz->ddev);
+		// kfree(dmz->ddev);
 	}
 	if (dmz->dev) {
-		kfree(dmz->dev);
+		// kfree(dmz->dev);
 	}
 
-	kfree(dmz);
+	// kfree(dmz);
 }
 
 // return zone_id which free block is available

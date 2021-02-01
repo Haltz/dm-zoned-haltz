@@ -171,16 +171,15 @@ static u64 dmz_l2p(struct dmz_target *dmz, sector_t logic) {
 	struct dmz_map *map_start = dmz->zmd->map_start;
 
 	u64 phy_blkid = (u64)(map_start + logic)->block_id;
+
+	if (phy_blkid >= (dmz->zmd->nr_zones * dmz->zmd->zone_nr_blocks)) {
+		pr_info("[dmz-phyical]: invalid physical: %llx\n", phy_blkid);
+		phy_blkid = ~0;
+	}
+
 	pr_info("[dmz-phyical]: logic: %llx, physical: %llx\n", logic, phy_blkid);
 
 	return phy_blkid;
-}
-
-static inline void dmz_bio_endio(struct bio *bio, blk_status_t status) {
-	if (status != BLK_STS_OK && bio->bi_status == BLK_STS_OK)
-		bio->bi_status = status;
-
-	bio_endio(bio);
 }
 
 // get that logic block is mapped or not
@@ -211,6 +210,13 @@ static int dmz_blk_is_mapped(struct dmz_target *dmz, unsigned long block) {
 // 	return DMZ_BLK_INVALID;
 // }
 
+static inline void dmz_bio_endio(struct bio *bio, blk_status_t status) {
+	if (status != BLK_STS_OK && bio->bi_status == BLK_STS_OK)
+		bio->bi_status = status;
+
+	bio_endio(bio);
+}
+
 static void dmz_clone_endio(struct bio *clone) {
 	blk_status_t status = clone->bi_status;
 	struct dmz_clone_bioctx *clone_bioctx = clone->bi_private;
@@ -223,6 +229,7 @@ static void dmz_clone_endio(struct bio *clone) {
 	}
 
 	bio_put(clone);
+	refcount_dec(&bioctx->ref);
 
 	// if write op succeeds, update mapping. (validate wp and invalidate evermapped if evermapped exists.)
 	if (status == BLK_STS_OK && bio_op(bioctx->bio) == REQ_OP_WRITE) {
@@ -234,7 +241,10 @@ static void dmz_clone_endio(struct bio *clone) {
 		}
 	}
 
+	pr_info("[dmz_clone_endio]: refcount: %d.\n", refcount_read(&bioctx->ref));
+
 	if (refcount_dec_and_test(&bioctx->ref)) {
+		pr_info("[dmz_clone_endio]: refcount_dec_and_test: %d.\n", refcount_read(&bioctx->ref));
 		dmz_bio_endio(bioctx->bio, status);
 	}
 }
@@ -253,6 +263,8 @@ static int dmz_submit_bio(struct dmz_target *dmz, struct bio *bio) {
 		pr_info("[dmz-warning]: not block align.\n");
 	}
 
+	bioctx->dev = zmd->dev;
+
 	for (int i = 0; i < nr_blocks; i++) {
 		struct bio *cloned_bio = bio_clone_fast(bio, GFP_ATOMIC, &dmz->bio_set);
 		if (!cloned_bio) {
@@ -260,7 +272,6 @@ static int dmz_submit_bio(struct dmz_target *dmz, struct bio *bio) {
 		}
 
 		bio_set_dev(cloned_bio, zmd->dev->bdev);
-		bioctx->dev = zmd->dev;
 
 		// default 0xffff ffff ffff ffff
 		sector_t phy_blkid = ~0;
@@ -285,11 +296,13 @@ static int dmz_submit_bio(struct dmz_target *dmz, struct bio *bio) {
 			}
 		}
 
-		cloned_bio->bi_iter.bi_sector = dmz_start_sector(dmz) + dmz_blk2sect(phy_blkid);
+		cloned_bio->bi_iter.bi_sector = dmz_start_sector(dmz) + dmz_blk2sect(logic_block);
 		cloned_bio->bi_iter.bi_size = dmz_blk2sect(1) << SECTOR_SHIFT;
 		cloned_bio->bi_end_io = dmz_clone_endio;
 
-		bio_advance(bioctx->bio, cloned_bio->bi_iter.bi_size);
+		pr_info("[dmz_submit_bio]: logic: %llx, physical: %llx\n", logic_block, phy_blkid);
+
+		bio_advance(bio, cloned_bio->bi_iter.bi_size);
 
 		refcount_inc(&bioctx->ref);
 
@@ -328,12 +341,15 @@ static int dmz_map(struct dm_target *ti, struct bio *bio) {
 
 	bioctx->dev = zmd->dev;
 	bioctx->bio = bio;
-	refcount_set(&bioctx->ref, 0);
+
+	// TODO why refcount_set(&bioctx->ref, 0); has a bug
+	refcount_set(&bioctx->ref, 1);
 
 	pr_info("[dmz-info]: bi_sector: %llx\t bi_size: %x\n", bio->bi_iter.bi_sector, bio->bi_iter.bi_size);
 
 	switch (bio_op(bio)) {
 	case REQ_OP_READ:
+		pr_info("[dmz-map]: read\n");
 		ret = dmz_handle_read(dmz, bio);
 		break;
 	case REQ_OP_WRITE:
@@ -348,6 +364,7 @@ static int dmz_map(struct dm_target *ti, struct bio *bio) {
 		pr_info("[dmz-map]: default\n");
 		// DMERR("(%s): Unsupported BIO operation 0x%x", dmz_metadata_label(dmz->metadata), bio_op(bio));
 		ret = -EIO;
+		break;
 	}
 
 	return DM_MAPIO_SUBMITTED;

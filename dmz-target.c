@@ -1,9 +1,19 @@
 #include "dmz.h"
 
+enum { DMZ_BLK_FREE, DMZ_BLK_VALID, DMZ_BLK_INVALID };
+enum { DMZ_UNMAPPED, DMZ_MAPPED };
+
 struct dmz_bioctx {
 	struct dmz_dev *dev;
 	struct bio *bio;
 	refcount_t ref;
+};
+
+struct dmz_clone_bioctx {
+	struct dmz_bioctx *bioctx;
+	struct dmz_target *dmz;
+	unsigned long logic_block;
+	unsigned long evermapped, willmapped;
 };
 
 /* Get Zoned Device Infomation */
@@ -129,12 +139,41 @@ static void dmz_dtr(struct dm_target *ti) {
 	kfree(dmz);
 }
 
-sector_t dmz_first_free_block(struct dmz_metadata *zmd) {
-	return 0;
+// return zone_id which free block is available
+int dmz_first_free_block(struct dmz_target *dmz) {
+	struct dmz_metadata *zmd = dmz->zmd;
+
+	for (int i = 0; i < zmd->nr_zones; i++) {
+		if ((zmd->zone_start + i)->wp < zmd->zone_nr_blocks) {
+			return i;
+		}
+	}
+
+	return ~0;
 }
 
-int dmz_invalidate_blocks(struct dmz_metadata *zmd, sector_t start, sector_t len) {
-	return 0;
+static void dmz_invalidate_block(struct dmz_target *dmz, sector_t block) {
+	struct dmz_metadata *zmd = dmz->zmd;
+	unsigned long *bmp = zmd->bitmap_start + (block >> 6);
+
+	*bmp = (*bmp) & (~(0x4f - (1 << (block & 0x3f))));
+}
+
+static void dmz_validate_block(struct dmz_target *dmz, sector_t block) {
+	struct dmz_metadata *zmd = dmz->zmd;
+	unsigned long *bmp = zmd->bitmap_start + (block >> 6);
+
+	*bmp = (*bmp) | (0x4f - (1 << (block & 0x3f)));
+}
+
+// map logic to physical. if unmapped, return 0xffff ffff ffff ffff(default reserved blk_id representing invalid)
+static u64 dmz_l2p(struct dmz_target *dmz, sector_t logic) {
+	struct dmz_map *map_start = dmz->zmd->map_start;
+
+	u64 phy_blkid = (u64)(map_start + logic)->block_id;
+	pr_info("[dmz-phyical]: logic: %llx, physical: %llx\n", logic, phy_blkid);
+
+	return phy_blkid;
 }
 
 static inline void dmz_bio_endio(struct bio *bio, blk_status_t status) {
@@ -144,38 +183,128 @@ static inline void dmz_bio_endio(struct bio *bio, blk_status_t status) {
 	bio_endio(bio);
 }
 
+// get that logic block is mapped or not
+static int dmz_blk_is_mapped(struct dmz_target *dmz, unsigned long block) {
+	struct dmz_metadata *zmd = dmz->zmd;
+
+	if (!(~(zmd->map_start + block)->block_id)) {
+		return DMZ_UNMAPPED;
+	}
+
+	return DMZ_MAPPED;
+}
+
+// get physical block status.
+// static int dmz_blk_status(struct dmz_target *dmz, unsigned long block) {
+// 	struct dmz_metadata *zmd = dmz->zmd;
+
+// 	if (!((~(zmd->map_start + block)->block_id) | 0)) {
+// 		return DMZ_BLK_FREE;
+// 	}
+
+// 	unsigned long bitmap = bitmap_get_value8(zmd->bitmap_start, block >> 6); // block / 64
+// 	int offset = block & (0x3f); // block%64
+// 	if (bitmap & (1 << (63 - offset))) {
+// 		return DMZ_BLK_VALID;
+// 	}
+
+// 	return DMZ_BLK_INVALID;
+// }
+
 static void dmz_clone_endio(struct bio *clone) {
 	blk_status_t status = clone->bi_status;
-	struct bio *bio = clone->bi_private;
+	struct dmz_clone_bioctx *clone_bioctx = clone->bi_private;
+	struct dmz_target *dmz = clone_bioctx->dmz;
+	struct dmz_bioctx *bioctx = clone_bioctx->bioctx;
+
+	if (status != BLK_STS_OK) {
+		pr_info("[dmz_clone_endio]: bio end unexpectedly.\n");
+		return;
+	}
 
 	bio_put(clone);
-	dmz_bio_endio(bio, status);
+
+	// if write op succeeds, update mapping. (validate wp and invalidate evermapped if evermapped exists.)
+	if (status == BLK_STS_OK && bio_op(bioctx->bio) == REQ_OP_WRITE) {
+		// if ever mapped, we need to invalidate it.
+		dmz_validate_block(dmz, clone_bioctx->willmapped);
+
+		if (dmz_is_valid_blkid(clone_bioctx->evermapped)) {
+			dmz_invalidate_block(dmz, clone_bioctx->evermapped);
+		}
+	}
+
+	if (refcount_dec_and_test(&bioctx->ref)) {
+		dmz_bio_endio(bioctx->bio, status);
+	}
+}
+
+static int dmz_submit_bio(struct dmz_target *dmz, struct bio *bio) {
+	struct dmz_bioctx *bioctx = dm_per_bio_data(bio, sizeof(struct dmz_bioctx));
+	struct dmz_metadata *zmd = dmz->zmd;
+	int op = bio_op(bio);
+
+	// find first free block.
+	sector_t nr_sectors = bio_sectors(bio), logic_sector = bio->bi_iter.bi_sector;
+	sector_t nr_blocks = dmz_sect2blk(nr_sectors), logic_block = dmz_sect2blk(logic_sector);
+
+	// test if align to block size.
+	if (nr_sectors & 0x7) {
+		pr_info("[dmz-warning]: not block align.\n");
+	}
+
+	for (int i = 0; i < nr_blocks; i++) {
+		struct bio *cloned_bio = bio_clone_fast(bio, GFP_ATOMIC, &dmz->bio_set);
+		if (!cloned_bio) {
+			return -ENOMEM;
+		}
+
+		bio_set_dev(cloned_bio, zmd->dev->bdev);
+		bioctx->dev = zmd->dev;
+
+		// default 0xffff ffff ffff ffff
+		sector_t phy_blkid = ~0;
+
+		struct dmz_clone_bioctx *clone_bioctx = kzalloc(sizeof(struct dmz_clone_bioctx), GFP_ATOMIC);
+		clone_bioctx->bioctx = bioctx;
+		clone_bioctx->dmz = dmz;
+		clone_bioctx->logic_block = logic_block + i;
+		clone_bioctx->evermapped = dmz_l2p(dmz, logic_block);
+
+		if (dmz_blk_is_mapped(dmz, logic_block + i) == DMZ_UNMAPPED) {
+			if (op == REQ_OP_WRITE) {
+				// alloc a free block to write.
+				int zone_id = dmz_first_free_block(dmz);
+				phy_blkid = (zmd->zone_start + zone_id)->wp;
+				clone_bioctx->willmapped = phy_blkid;
+			} else { // read unmapped is invalid.
+				// return -EINVAL;
+
+				// if unmapped, return physical block number == logic number
+				phy_blkid = logic_block;
+			}
+		}
+
+		cloned_bio->bi_iter.bi_sector = dmz_start_sector(dmz) + dmz_blk2sect(phy_blkid);
+		cloned_bio->bi_iter.bi_size = dmz_blk2sect(1) << SECTOR_SHIFT;
+		cloned_bio->bi_end_io = dmz_clone_endio;
+
+		bio_advance(bioctx->bio, cloned_bio->bi_iter.bi_size);
+
+		refcount_inc(&bioctx->ref);
+
+		cloned_bio->bi_private = clone_bioctx;
+
+		submit_bio_noacct(cloned_bio);
+	}
+
+	return 0;
 }
 
 static int dmz_handle_read(struct dmz_target *dmz, struct bio *bio) {
 	pr_info("[dmz-map]: R\n");
 
-	struct dmz_metadata *zmd = dmz->zmd;
-
-	// find first free block.
-	sector_t nr_sectors = bio_sectors(bio), logic_addr_start_sector = bio->bi_iter.bi_sector;
-	sector_t nr_blocks = dmz_sect2blk(nr_sectors), logic_addr_start_block = dmz_sect2blk(logic_addr_start_sector);
-
-	struct bio *cloned_bio = bio_clone_fast(bio, GFP_ATOMIC, &dmz->bio_set);
-	if (!cloned_bio) {
-		return -ENOMEM;
-	}
-
-	cloned_bio->bi_private = bio;
-	bio_set_dev(cloned_bio, zmd->dev->bdev);
-	cloned_bio->bi_iter.bi_sector = dmz_start_sector(dmz) + logic_addr_start_sector;
-	cloned_bio->bi_iter.bi_size = dmz_blk2sect(nr_blocks) << SECTOR_SHIFT;
-	cloned_bio->bi_end_io = dmz_clone_endio;
-
-	pr_info("[dmz-read]: nr_blocks: 0x%llx, useable_start: 0x%llx, read_from_block: 0x%llx, read_size: 0x%llx\n", zmd->nr_blocks, zmd->useable_start, dmz_sect2blk(dmz_start_sector(dmz) + logic_addr_start_sector), nr_blocks);
-
-	// submit bio.
-	submit_bio_noacct(cloned_bio);
+	dmz_submit_bio(dmz, bio);
 
 	return 0;
 }
@@ -192,9 +321,14 @@ static int dmz_handle_write(struct dmz_target *dmz, struct bio *bio) {
 static int dmz_map(struct dm_target *ti, struct bio *bio) {
 	pr_info("[dmz]: Map Called.");
 
+	struct dmz_bioctx *bioctx = dm_per_bio_data(bio, sizeof(struct dmz_bioctx));
 	struct dmz_target *dmz = ti->private;
 	struct dmz_metadata *zmd = dmz->zmd;
 	int ret = 0;
+
+	bioctx->dev = zmd->dev;
+	bioctx->bio = bio;
+	refcount_set(&bioctx->ref, 0);
 
 	pr_info("[dmz-info]: bi_sector: %llx\t bi_size: %x\n", bio->bi_iter.bi_sector, bio->bi_iter.bi_size);
 
@@ -232,7 +366,7 @@ static int dmz_iterate_devices(struct dm_target *ti, iterate_devices_callout_fn 
 	struct dmz_target *dmz = ti->private;
 	unsigned int zone_nr_sectors = dmz->zmd->zone_nr_sectors;
 	sector_t capacity;
-	int i, r;
+	int r;
 
 	capacity = dmz->dev->capacity & ~(zone_nr_sectors - 1);
 	r = fn(ti, dmz->ddev, 0, capacity, data);
@@ -252,7 +386,7 @@ static void dmz_io_hints(struct dm_target *ti, struct queue_limits *limits) {
 	struct dmz_target *dmz = ti->private;
 	unsigned int chunk_sectors = dmz->zmd->zone_nr_sectors;
 
-	pr_info("[dmz-info]: zone_nr_sectors: %llx, block_size %llx\n", dmz->zmd->zone_nr_sectors, DMZ_BLOCK_SIZE);
+	pr_info("[dmz-info]: zone_nr_sectors: %llx, block_size %x\n", dmz->zmd->zone_nr_sectors, DMZ_BLOCK_SIZE);
 
 	limits->logical_block_size = DMZ_BLOCK_SIZE;
 	limits->physical_block_size = DMZ_BLOCK_SIZE;

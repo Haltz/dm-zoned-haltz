@@ -65,7 +65,11 @@
 #define dmz_start_sector(dmz) dmz_blk2sect((dmz)->zmd->useable_start)
 #define dmz_start_block(dmz) ((dmz)->zmd->useable_start)
 
+#define dmz_is_valid_blkid(blk_id) (~blk_id)
+
 #define DMZ_MIN_BIOS 8192
+
+enum DMZ_STATUS { DMZ_BLOCK_FREE, DMZ_BLOCK_INVALID, DMZ_BLOCK_VALID };
 
 /*
  * Super block information (one per metadata set).

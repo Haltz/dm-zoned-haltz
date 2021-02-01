@@ -153,7 +153,7 @@ struct dmz_map *dmz_load_map(struct dmz_metadata *zmd) {
 			dmz_free_mblk(mblk);
 			goto read_err;
 		}
-		memcpy(map_ptr + i, mblk->data, DMZ_BLOCK_SIZE);
+		memcpy(map_ptr + i * (DMZ_BLOCK_SIZE / sizeof(struct dmz_map)), mblk->data, DMZ_BLOCK_SIZE);
 		dmz_free_mblk(mblk);
 	}
 	return map_ptr;
@@ -200,7 +200,7 @@ unsigned long *dmz_load_bitmap(struct dmz_metadata *zmd) {
 			dmz_free_mblk(mblk);
 			goto read_err;
 		}
-		memcpy(bitmap + DMZ_BLOCK_SIZE * i, mblk->data, DMZ_BLOCK_SIZE);
+		memcpy(bitmap + (DMZ_BLOCK_SIZE / sizeof(unsigned long)) * i, mblk->data, DMZ_BLOCK_SIZE);
 		dmz_free_mblk(mblk);
 	}
 

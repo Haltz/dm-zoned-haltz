@@ -326,6 +326,7 @@ static int dmz_handle_write(struct dmz_target *dmz, struct bio *bio) {
 	pr_info("[dmz-map]: W\n");
 
 	// submit bio.
+	dmz_submit_bio(dmz, bio);
 
 	return 0;
 }
@@ -353,6 +354,7 @@ static int dmz_map(struct dm_target *ti, struct bio *bio) {
 		ret = dmz_handle_read(dmz, bio);
 		break;
 	case REQ_OP_WRITE:
+		pr_info("[dmz-map]: read\n");
 		ret = dmz_handle_write(dmz, bio);
 		break;
 	case REQ_OP_DISCARD:

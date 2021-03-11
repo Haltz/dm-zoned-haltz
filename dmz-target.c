@@ -61,9 +61,30 @@ static int dmz_fixup_device(struct dm_target *ti) {
 	return 0;
 }
 
+/* 
+* check sanity & correctness of metadata
+*/
+static void dmz_check_meta(struct dmz_target *dmz) {
+	struct dmz_metadata *zmd = dmz->zmd;
+	if (!zmd->map_start) {
+		pr_err("zmd->map_start is null.\n");
+		return;
+	}
+
+	for (unsigned long long i = 0; i < zmd->nr_maps; i++) {
+		if ((~(zmd->map_start + i)->block_id)) {
+			pr_err("index: %llx, block_id: %llx，(fuck fix it tempoarily).\n", i, ((zmd->map_start + i)->block_id));
+			(zmd->map_start + i)->block_id = ~0;
+			if ((~(zmd->map_start + i)->block_id)) {
+				pr_err("Haven;t fixed it in fact.\n");
+			}
+		}
+	}
+}
+
 /* Initilize device mapper */
 static int dmz_ctr(struct dm_target *ti, unsigned int argc, char **argv) {
-	pr_info("[dmz]: ctr Called.\n");
+	// pr_info("[dmz]: ctr Called.\n");
 	if (argc > 1 || argc == 0) {
 		ti->error = "Invalid argument count";
 		pr_err("ZBD number is invalid. Only 1 supported.");
@@ -122,11 +143,13 @@ static int dmz_ctr(struct dm_target *ti, unsigned int argc, char **argv) {
 	ti->flush_supported = true;
 	ti->discards_supported = true;
 
+	dmz_check_meta(dmz);
+
 	return 0;
 }
 
 static void dmz_dtr(struct dm_target *ti) {
-	pr_info("[dmz]: dtr Called.");
+	// pr_info("[dmz]: dtr Called.");
 	struct dmz_target *dmz = ti->private;
 	dmz_put_zoned_device(ti);
 
@@ -169,7 +192,7 @@ static void dmz_invalidate_block(struct dmz_target *dmz, sector_t block) {
 	spin_lock_irqsave(&zmd->bitmap_lock, flags);
 	unsigned long *bmp = zmd->bitmap_start + (block >> 6);
 
-	pr_info("[dmz_invalidate_block]: offset %llx, before %lx, after %lx\n", block & 0x3f, (unsigned long)*bmp, (unsigned long)(*bmp) & (unsigned long)(~(((u64)1) << (0x3f - (block & 0x3f)))));
+	// pr_info("[dmz_invalidate_block]: offset %llx, before %lx, after %lx\n", block & 0x3f, (unsigned long)*bmp, (unsigned long)(*bmp) & (unsigned long)(~(((u64)1) << (0x3f - (block & 0x3f)))));
 
 	*bmp = (unsigned long)(*bmp) & (unsigned long)(~(((u64)1) << (0x3f - (block & 0x3f))));
 	spin_unlock_irqrestore(&zmd->bitmap_lock, flags);
@@ -182,7 +205,7 @@ static void dmz_validate_block(struct dmz_target *dmz, sector_t block) {
 	spin_lock_irqsave(&zmd->bitmap_lock, flags);
 	unsigned long *bmp = zmd->bitmap_start + (block >> 6);
 
-	pr_info("[dmz_validate_block]: offset %llx, before %lx, after %lx\n", block & 0x3f, (unsigned long)*bmp, (unsigned long)(*bmp) | (unsigned long)(((u64)1) << (0x3f - (block & 0x3f))));
+	// pr_info("[dmz_validate_block]: offset %llx, before %lx, after %lx\n", block & 0x3f, (unsigned long)*bmp, (unsigned long)(*bmp) | (unsigned long)(((u64)1) << (0x3f - (block & 0x3f))));
 
 	*bmp = (unsigned long)(*bmp) | (unsigned long)(((u64)1) << (0x3f - (block & 0x3f)));
 	spin_unlock_irqrestore(&zmd->bitmap_lock, flags);
@@ -199,11 +222,11 @@ static u64 dmz_l2p(struct dmz_target *dmz, sector_t logic) {
 	u64 phy_blkid = (u64)(map_start + logic)->block_id;
 
 	if (phy_blkid >= (dmz->zmd->nr_zones * dmz->zmd->zone_nr_blocks)) {
-		pr_info("[dmz-phyical]: invalid physical: %llx\n", phy_blkid);
+		// pr_info("[dmz-err]: invalid physical: %llx\n", phy_blkid);
 		phy_blkid = ~0;
 	}
 
-	pr_info("[dmz-phyical]: logic: %llx, physical: %llx\n", logic, phy_blkid);
+	// pr_info("[dmz-phyical]: logic: %llx, physical: %llx\n", logic, phy_blkid);
 	spin_unlock_irqrestore(&zmd->maptable_lock, flags);
 
 	return phy_blkid;
@@ -240,11 +263,11 @@ static void dmz_update_map(struct dmz_target *dmz, unsigned long logic, unsigned
 
 	spin_lock_irqsave(&zmd->maptable_lock, flags);
 
-	pr_info("[dmz_update_map]: logic: %lx, before update_map %llx\n ", logic, map_ptr->block_id);
+	// pr_info("[dmz_update_map]: logic: %lx, before update_map %llx\n ", logic, map_ptr->block_id);
 
 	map_ptr->block_id = physic;
 
-	pr_info("[dmz_update_map]: logic: %lx, after update_map %llx\n", logic, map_ptr->block_id);
+	// pr_info("[dmz_update_map]: logic: %lx, after update_map %llx\n", logic, map_ptr->block_id);
 
 	spin_unlock_irqrestore(&zmd->maptable_lock, flags);
 }
@@ -275,10 +298,10 @@ static void dmz_clone_endio(struct bio *clone) {
 		// (dmz->zmd->zone_start + zone_id)->wp++;
 	}
 
-	pr_info("[dmz_clone_endio]: refcount: %d.\n", refcount_read(&bioctx->ref));
+	// pr_info("[dmz_clone_endio]: refcount: %d.\n", refcount_read(&bioctx->ref));
 
 	if (refcount_dec_if_one(&bioctx->ref)) {
-		pr_info("[dmz_clone_endio]: refcount_dec_and_test: %d.\n", refcount_read(&bioctx->ref));
+		// pr_info("[dmz_clone_endio]: refcount_dec_and_test: %d.\n", refcount_read(&bioctx->ref));
 		dmz_bio_endio(bioctx->bio, status);
 	}
 }

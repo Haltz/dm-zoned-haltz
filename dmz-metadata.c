@@ -3,10 +3,11 @@
 /*
  * Metadata block state flags.
  */
-enum { DMZ_META_DIRTY,
-       DMZ_META_READING,
-       DMZ_META_WRITING,
-       DMZ_META_ERROR,
+enum {
+	DMZ_META_DIRTY,
+	DMZ_META_READING,
+	DMZ_META_WRITING,
+	DMZ_META_ERROR,
 };
 
 struct dmz_super {

@@ -115,6 +115,11 @@ struct dmz_metadata {
 
 	// first useable block number.
 	unsigned long useable_start;
+
+	// locks
+	spinlock_t meta_lock;
+	spinlock_t maptable_lock;
+	spinlock_t bitmap_lock;
 };
 
 struct dmz_map {

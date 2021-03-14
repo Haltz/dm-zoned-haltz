@@ -139,8 +139,9 @@ mblk_err:
 }
 
 struct dmz_map *dmz_load_map(struct dmz_metadata *zmd) {
-	struct dmz_map *map_ptr = kcalloc(zmd->nr_maps, sizeof(struct dmz_map), GFP_ATOMIC);
+	struct dmz_map *map_ptr = kcalloc(zmd->nr_blocks, sizeof(struct dmz_map), GFP_ATOMIC);
 	if (!map_ptr) {
+		pr_err("Allocate memory for mapping table ptr failed. Memory is not enough.\n");
 		goto end;
 	}
 
@@ -177,6 +178,16 @@ struct dm_zone *dmz_load_zones(struct dmz_metadata *zmd, unsigned long *bitmap) 
 		cur_zone->weight = 0;
 		cur_zone->wp = 0;
 		cur_zone->bitmap = bitmap + (zmd->zone_nr_blocks >> 6) * i;
+		cur_zone->mt = kcalloc(zmd->zone_nr_blocks, sizeof(struct dmz_map), GFP_ATOMIC);
+		for (int j = 0; j < zmd->zone_nr_blocks; j++) {
+			(cur_zone->mt + j)->block_id = ~0;
+		}
+	}
+
+	for (int i = 0; i < zmd->useable_start; i++) {
+		unsigned long index = i / zmd->zone_nr_blocks;
+		unsigned long offset = i % zmd->zone_nr_blocks;
+		((zone_start + index)->mt + offset)->block_id = i;
 	}
 
 	return zone_start;
@@ -235,31 +246,30 @@ int dmz_get_metadata(struct dmz_metadata *zmd) {
 	dmz_free_mblk(mblk);
 	zmd->sb = super;
 
-	pr_info("super: %d, map: %d, bitmap: %d\n", zmd->sb_block, zmd->map_block, zmd->bitmap_block);
+	zmd->nr_blocks = zmd->capacity >> 3; // the unit of capacity is sectors
 
-	zmd->nr_map_blocks = (sector_t)super->nr_map_blocks;
-	zmd->nr_maps = (sector_t)super->nr_map_blocks * (DMZ_BLOCK_SIZE / sizeof(struct dmz_map));
-
-	zmd->nr_bitmap_blocks = (sector_t)super->nr_bitmap_blocks;
+	zmd->nr_map_blocks = zmd->nr_blocks >> 9;
+	zmd->nr_bitmap_blocks = zmd->nr_blocks >> 15;
 
 	// zmd->sb_block = (sector_t)super->sb_block;
 	zmd->sb_block = 0;
 	zmd->map_block = (sector_t)super->sb_block + 1;
 	zmd->bitmap_block = (sector_t)super->sb_block + (sector_t)super->nr_map_blocks + 1;
 
-	struct dmz_map *map_ptr = dmz_load_map(zmd);
-	if (!map_ptr) {
-		ret = -ENOMEM;
-		goto map;
-	}
-	zmd->map_start = map_ptr;
+	zmd->useable_start = 1 + zmd->nr_map_blocks + zmd->nr_bitmap_blocks;
 
-	unsigned long *bitmap_ptr = dmz_load_bitmap(zmd);
+	// struct dmz_map *map_ptr = dmz_load_map(zmd);
+	pr_info("mapping table size: %lld\n", zmd->nr_blocks * sizeof(struct dmz_map));
+
+	// unsigned long *bitmap_ptr = dmz_load_bitmap(zmd);
+	unsigned long *bitmap_ptr = bitmap_alloc(zmd->capacity >> 3, GFP_ATOMIC);
 	if (!bitmap_ptr) {
 		ret = -ENOMEM;
 		goto bitmap;
 	}
 	zmd->bitmap_start = bitmap_ptr;
+
+	pr_info("Bitmap succeed.\n");
 
 	struct dm_zone *zone_start = dmz_load_zones(zmd, zmd->bitmap_start);
 	if (!zone_start) {
@@ -267,17 +277,16 @@ int dmz_get_metadata(struct dmz_metadata *zmd) {
 		goto zones;
 	}
 	zmd->zone_start = zone_start;
+	pr_info("Zones succeed.\n");
 
+	// Allocating large continuous memory for mapping table tends to fail.
+	// In such case, I allocate small memory for each zone to split mapping table, which reduce pressure for memory and still easy to update mapping table.
 	return 0;
 
 zones:
-	kfree(bitmap_ptr);
 bitmap:
-	kfree(map_ptr);
 map:
-	kfree(super);
 super:
-	dmz_free_mblk(mblk);
 mblk:
 	pr_err("Load metadata failed.\n");
 	return ret;
@@ -312,8 +321,6 @@ int dmz_ctr_metadata(struct dmz_target *dmz) {
 		return ret;
 	}
 
-	zmd->useable_start = 1 + zmd->nr_map_blocks + zmd->nr_bitmap_blocks;
-
 	dmz->zmd = zmd;
 
 	return 0;
@@ -325,9 +332,6 @@ void dmz_dtr_metadata(struct dmz_metadata *zmd) {
 
 	if (zmd->sb) {
 		kfree(zmd->sb);
-	}
-	if (zmd->map_start) {
-		kfree(zmd->map_start);
 	}
 	if (zmd->bitmap_start) {
 		kfree(zmd->bitmap_start);

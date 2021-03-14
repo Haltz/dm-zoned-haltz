@@ -39,7 +39,7 @@
 /*
  * dm-zoned creates block devices with 4KB blocks, always.
  */
-#define DMZ_BLOCK_SHIFT 12
+#define DMZ_BLOCK_SHIFT (12)
 #define DMZ_BLOCK_SIZE (1 << DMZ_BLOCK_SHIFT)
 #define DMZ_BLOCK_MASK (DMZ_BLOCK_SIZE - 1)
 
@@ -51,7 +51,7 @@
 #define DMZ_BLOCK_SECTORS (DMZ_BLOCK_SIZE >> SECTOR_SHIFT)
 #define DMZ_BLOCK_SECTORS_MASK (DMZ_BLOCK_SECTORS - 1)
 
-#define DMZ_ZONE_BLOCKS_SHIFT 16
+#define DMZ_ZONE_BLOCKS_SHIFT (16)
 
 /*
  * 4KB block <-> 512B sector conversion.
@@ -97,8 +97,6 @@ struct dmz_metadata {
 	sector_t zone_nr_sectors;
 	sector_t zone_nr_blocks;
 
-	sector_t nr_maps;
-
 	sector_t nr_map_blocks;
 	sector_t nr_bitmap_blocks;
 
@@ -107,7 +105,6 @@ struct dmz_metadata {
 	sector_t bitmap_block;
 
 	struct dmz_super *sb;
-	struct dmz_sb super_block_info;
 
 	struct dm_zone *zone_start;
 	struct dmz_map *map_start;
@@ -163,11 +160,13 @@ struct dm_zone {
 	unsigned int weight;
 	// unsigned int physical_zone;
 	unsigned long *bitmap;
+	struct dmz_map *mt;
 };
 
 int dmz_ctr_metadata(struct dmz_target *);
 void dmz_dtr_metadata(struct dmz_metadata *);
-
 int dmz_ctr_reclaim(void);
+
+u64 dmz_get_map(struct dmz_metadata *zmd, u64 lba);
 
 #endif

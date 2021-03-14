@@ -150,6 +150,8 @@ struct dmz_target {
 
 	// if we want to clone bios, bio_set is neccessary.
 	struct bio_set bio_set;
+
+	spinlock_t single_thread_lock;
 };
 
 struct dm_zone {

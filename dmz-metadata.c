@@ -235,12 +235,15 @@ int dmz_get_metadata(struct dmz_metadata *zmd) {
 	dmz_free_mblk(mblk);
 	zmd->sb = super;
 
+	pr_info("super: %d, map: %d, bitmap: %d\n", zmd->sb_block, zmd->map_block, zmd->bitmap_block);
+
 	zmd->nr_map_blocks = (sector_t)super->nr_map_blocks;
 	zmd->nr_maps = (sector_t)super->nr_map_blocks * (DMZ_BLOCK_SIZE / sizeof(struct dmz_map));
 
 	zmd->nr_bitmap_blocks = (sector_t)super->nr_bitmap_blocks;
 
-	zmd->sb_block = (sector_t)super->sb_block;
+	// zmd->sb_block = (sector_t)super->sb_block;
+	zmd->sb_block = 0;
 	zmd->map_block = (sector_t)super->sb_block + 1;
 	zmd->bitmap_block = (sector_t)super->sb_block + (sector_t)super->nr_map_blocks + 1;
 

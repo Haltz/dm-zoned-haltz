@@ -67,6 +67,9 @@
 
 #define dmz_is_valid_blkid(blk_id) (~blk_id)
 
+// default pba which value is 0x ffff ffff ffff ffff indicates that lba is not wrote yet
+#define dmz_is_default_pba(pba) (!(~pba))
+
 #define DMZ_MIN_BIOS 8192
 
 enum DMZ_STATUS { DMZ_BLOCK_FREE, DMZ_BLOCK_INVALID, DMZ_BLOCK_VALID };
@@ -148,6 +151,8 @@ struct dmz_target {
 	// if we want to clone bios, bio_set is neccessary.
 	struct bio_set bio_set;
 
+	// This lock is to simplify development of demo by making program single-thread.
+	// Disable it when pipeline is good.
 	spinlock_t single_thread_lock;
 };
 

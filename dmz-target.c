@@ -160,7 +160,7 @@ static void dmz_dtr(struct dm_target *ti) {
 }
 
 // return zone_id which free block is available
-int dmz_first_free_block(struct dmz_target *dmz) {
+int dmz_pba_alloc(struct dmz_target *dmz) {
 	struct dmz_metadata *zmd = dmz->zmd;
 	unsigned long flags;
 
@@ -242,7 +242,7 @@ static void dmz_bio_endio(struct bio *bio, blk_status_t status) {
 	bio_endio(bio);
 }
 
-static void dmz_update_map(struct dmz_target *dmz, unsigned long lba, unsigned long pba) {
+void dmz_update_map(struct dmz_target *dmz, unsigned long lba, unsigned long pba) {
 	struct dmz_metadata *zmd = dmz->zmd;
 	int index = lba / zmd->zone_nr_blocks;
 	int offset = lba % zmd->zone_nr_blocks;
@@ -316,7 +316,7 @@ static int dmz_submit_bio(struct dmz_target *dmz, struct bio *bio) {
 		if (dmz_is_default_pba(pba)) {
 			if (op == REQ_OP_WRITE) {
 				// alloc a free block to write.
-				int zone_id = dmz_first_free_block(dmz);
+				int zone_id = dmz_pba_alloc(dmz);
 
 				// protect zone->wp;
 				// spin_lock_irqsave(&zmd->meta_lock, lock_flags);
@@ -348,7 +348,7 @@ static int dmz_submit_bio(struct dmz_target *dmz, struct bio *bio) {
 		} else {
 			if (op == REQ_OP_WRITE) {
 				// alloc a free block to write.
-				int zone_id = dmz_first_free_block(dmz);
+				int zone_id = dmz_pba_alloc(dmz);
 
 				// protect zone->wp;
 				// spin_lock_irqsave(&zmd->meta_lock, lock_flags);

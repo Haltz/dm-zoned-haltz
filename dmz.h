@@ -173,5 +173,8 @@ void dmz_dtr_metadata(struct dmz_metadata *);
 int dmz_ctr_reclaim(void);
 
 u64 dmz_get_map(struct dmz_metadata *zmd, u64 lba);
+void dmz_update_map(struct dmz_target *dmz, unsigned long lba, unsigned long pba);
+
+int dmz_pba_alloc(struct dmz_target *dmz);
 
 #endif

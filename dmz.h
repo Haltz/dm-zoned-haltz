@@ -27,6 +27,8 @@
 #include <linux/bio.h>
 #include <linux/log2.h>
 
+#define PROBE(message) pr_info("%s", message);
+
 #define KB (1 << 10)
 #define MB (1 << 20)
 #define GB (1 << 30)
@@ -165,12 +167,17 @@ struct dm_zone {
 	unsigned int weight;
 	// unsigned int physical_zone;
 	unsigned long *bitmap;
+
+	// Mapping Table
 	struct dmz_map *mt;
+	// Reverse Mapping Table
+	struct dmz_map *reverse_mt;
 };
 
 int dmz_ctr_metadata(struct dmz_target *);
 void dmz_dtr_metadata(struct dmz_metadata *);
 int dmz_ctr_reclaim(void);
+int dmz_reclaim_zone(struct dmz_target *dmz, int zone);
 
 u64 dmz_get_map(struct dmz_metadata *zmd, u64 lba);
 void dmz_update_map(struct dmz_target *dmz, unsigned long lba, unsigned long pba);

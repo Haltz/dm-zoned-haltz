@@ -178,16 +178,19 @@ struct dm_zone *dmz_load_zones(struct dmz_metadata *zmd, unsigned long *bitmap) 
 		cur_zone->weight = 0;
 		cur_zone->wp = 0;
 		cur_zone->bitmap = bitmap + (zmd->zone_nr_blocks >> 6) * i;
-		cur_zone->mt = kcalloc(zmd->zone_nr_blocks, sizeof(struct dmz_map), GFP_ATOMIC);
+		cur_zone->mt = kcalloc(zmd->zone_nr_blocks, sizeof(struct dmz_map), GFP_KERNEL);
+		cur_zone->reverse_mt = kcalloc(zmd->zone_nr_blocks, sizeof(struct dmz_map), GFP_KERNEL);
 		for (int j = 0; j < zmd->zone_nr_blocks; j++) {
-			(cur_zone->mt + j)->block_id = ~0;
+			cur_zone->mt[j].block_id = ~0;
+			cur_zone->reverse_mt[j].block_id = ~0;
 		}
 	}
 
 	for (int i = 0; i < zmd->useable_start; i++) {
 		unsigned long index = i / zmd->zone_nr_blocks;
 		unsigned long offset = i % zmd->zone_nr_blocks;
-		((zone_start + index)->mt + offset)->block_id = i;
+		zone_start[index].mt[offset].block_id = i;
+		zone_start[index].reverse_mt[offset].block_id = i;
 	}
 
 	return zone_start;
@@ -195,25 +198,32 @@ struct dm_zone *dmz_load_zones(struct dmz_metadata *zmd, unsigned long *bitmap) 
 
 /* Load bitmap and zones */
 unsigned long *dmz_load_bitmap(struct dmz_metadata *zmd) {
+	// First >>3 is sector to block, second >>3 is bit to byte
+	zmd->nr_bitmap_blocks = zmd->capacity >> 3 >> 3 >> DMZ_BLOCK_SHIFT;
 	pr_info("[dmz-load]: bitmap loading, %lld bitmap blocks in total.\n", zmd->nr_bitmap_blocks);
-
-	unsigned long *bitmap = kzalloc(zmd->nr_bitmap_blocks * DMZ_BLOCK_SIZE, GFP_ATOMIC);
+	unsigned long *bitmap = bitmap_alloc(zmd->capacity >> 3, GFP_ATOMIC);
 	if (!bitmap) {
 		return NULL;
 	}
 
-	for (int i = 0; i < zmd->nr_bitmap_blocks; i++) {
-		struct dmz_mblk *mblk = dmz_get_mblk(zmd, zmd->bitmap_block + i);
-		if (!mblk) {
-			goto read_err;
-		}
-		wait_on_bit_io(&mblk->state, DMZ_META_READING, TASK_UNINTERRUPTIBLE);
-		if (test_bit(DMZ_META_ERROR, &mblk->state)) {
-			dmz_free_mblk(mblk);
-			goto read_err;
-		}
-		memcpy(bitmap + (DMZ_BLOCK_SIZE / sizeof(unsigned long)) * i, mblk->data, DMZ_BLOCK_SIZE);
-		dmz_free_mblk(mblk);
+	// for (int i = 0; i < zmd->nr_bitmap_blocks; i++) {
+	// 	struct dmz_mblk *mblk = dmz_get_mblk(zmd, zmd->bitmap_block + i);
+	// 	if (!mblk) {
+	// 		goto read_err;
+	// 	}
+	// 	wait_on_bit_io(&mblk->state, DMZ_META_READING, TASK_UNINTERRUPTIBLE);
+	// 	if (test_bit(DMZ_META_ERROR, &mblk->state)) {
+	// 		dmz_free_mblk(mblk);
+	// 		goto read_err;
+	// 	}
+	// 	memcpy(bitmap + (DMZ_BLOCK_SIZE / sizeof(unsigned long)) * i, mblk->data, DMZ_BLOCK_SIZE);
+	// 	dmz_free_mblk(mblk);
+	// }
+
+	for (int i = 0; i < zmd->useable_start; i++) {
+		int index = i / zmd->zone_nr_blocks, offset = i % zmd->useable_start;
+		bitmap_set(bitmap, i, 1);
+		pr_info("at offset %d: %x\n", i, bitmap_get_value8(bitmap, i));
 	}
 
 	return bitmap;
@@ -261,8 +271,8 @@ int dmz_get_metadata(struct dmz_metadata *zmd) {
 	// struct dmz_map *map_ptr = dmz_load_map(zmd);
 	pr_info("mapping table size: %lld\n", zmd->nr_blocks * sizeof(struct dmz_map));
 
-	// unsigned long *bitmap_ptr = dmz_load_bitmap(zmd);
-	unsigned long *bitmap_ptr = bitmap_alloc(zmd->capacity >> 3, GFP_ATOMIC);
+	unsigned long *bitmap_ptr = dmz_load_bitmap(zmd);
+	// unsigned long *bitmap_ptr = bitmap_alloc(zmd->capacity >> 3, GFP_ATOMIC);
 	if (!bitmap_ptr) {
 		ret = -ENOMEM;
 		goto bitmap;

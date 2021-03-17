@@ -176,32 +176,6 @@ int dmz_pba_alloc(struct dmz_target *dmz) {
 	return ~0;
 }
 
-static void dmz_invalidate_block(struct dmz_target *dmz, sector_t block) {
-	struct dmz_metadata *zmd = dmz->zmd;
-	unsigned long flags;
-
-	// spin_lock_irqsave(&zmd->bitmap_lock, flags);
-	unsigned long *bmp = zmd->bitmap_start + (block >> 6);
-
-	// pr_info("[dmz_invalidate_block]: offset %llx, before %lx, after %lx\n", block & 0x3f, (unsigned long)*bmp, (unsigned long)(*bmp) & (unsigned long)(~(((u64)1) << (0x3f - (block & 0x3f)))));
-
-	*bmp = (unsigned long)(*bmp) & (unsigned long)(~(((u64)1) << (0x3f - (block & 0x3f))));
-	// spin_unlock_irqrestore(&zmd->bitmap_lock, flags);
-}
-
-static void dmz_validate_block(struct dmz_target *dmz, sector_t block) {
-	struct dmz_metadata *zmd = dmz->zmd;
-	unsigned long flags;
-
-	// spin_lock_irqsave(&zmd->bitmap_lock, flags);
-	unsigned long *bmp = zmd->bitmap_start + (block >> 6);
-
-	// pr_info("[dmz_validate_block]: offset %llx, before %lx, after %lx\n", block & 0x3f, (unsigned long)*bmp, (unsigned long)(*bmp) | (unsigned long)(((u64)1) << (0x3f - (block & 0x3f))));
-
-	*bmp = (unsigned long)(*bmp) | (unsigned long)(((u64)1) << (0x3f - (block & 0x3f)));
-	// spin_unlock_irqrestore(&zmd->bitmap_lock, flags);
-}
-
 u64 dmz_get_map(struct dmz_metadata *zmd, u64 lba) {
 	unsigned long flags;
 	u64 index = lba / zmd->zone_nr_blocks;
@@ -248,10 +222,25 @@ void dmz_update_map(struct dmz_target *dmz, unsigned long lba, unsigned long pba
 	int offset = lba % zmd->zone_nr_blocks;
 	unsigned long flags;
 
-	struct dm_zone *cur_zone = zmd->zone_start + index;
+	struct dm_zone *cur_zone = &zmd->zone_start[index];
 	// spin_lock_irqsave(&zmd->maptable_lock, flags);
-	(cur_zone->mt + offset)->block_id = pba;
+	unsigned long old_pba = cur_zone->mt[offset].block_id;
+	cur_zone->mt[offset].block_id = pba;
 	// spin_unlock_irqrestore(&zmd->maptable_lock, flags);
+
+	int p_index = pba / zmd->zone_nr_blocks;
+	int p_offset = pba % zmd->zone_nr_blocks;
+	struct dm_zone *p_zone = &zmd->zone_start[p_index];
+	p_zone->reverse_mt[p_offset].block_id = lba;
+
+	int old_p_index = old_pba / zmd->zone_nr_blocks;
+	int old_p_offset = old_pba / zmd->zone_nr_blocks;
+	struct dm_zone *old_p_zone = &zmd->zone_start[old_p_index];
+	old_p_zone->reverse_mt[old_p_offset].block_id = ~0;
+
+	// update bitmap
+	bitmap_clear(zmd->bitmap_start, old_pba, 1);
+	bitmap_set(zmd->bitmap_start, pba, 1);
 }
 
 static void dmz_clone_endio(struct bio *clone) {
@@ -267,13 +256,6 @@ static void dmz_clone_endio(struct bio *clone) {
 
 	// if write op succeeds, update mapping. (validate wp and invalidate old_pba if old_pba exists.)
 	if (status == BLK_STS_OK && bio_op(bioctx->bio) == REQ_OP_WRITE) {
-		dmz_validate_block(dmz, clone_bioctx->new_pba);
-
-		// if lba is mapped yet, we need to invalidate it's old pba.
-		if (!dmz_is_default_pba(clone_bioctx->old_pba)) {
-			dmz_invalidate_block(dmz, clone_bioctx->old_pba);
-		}
-
 		dmz_update_map(dmz, clone_bioctx->lba, clone_bioctx->new_pba);
 	} else {
 	}
@@ -413,6 +395,7 @@ static int dmz_handle_write(struct dmz_target *dmz, struct bio *bio) {
 
 static int dmz_handle_discard(struct dmz_target *dmz, struct bio *bio) {
 	// pr_info("Discard or write zeros\n");
+	struct dmz_metadata *zmd = dmz->zmd;
 
 	int ret = 0;
 
@@ -426,7 +409,7 @@ static int dmz_handle_discard(struct dmz_target *dmz, struct bio *bio) {
 			// discarding unmapped is invalid
 			// pr_info("[dmz-err]: try to [discard/write zeros] to unmapped block.(Tempoarily I allow it.\n)");
 		} else {
-			dmz_invalidate_block(dmz, pba);
+			bitmap_clear(zmd->bitmap_start, pba, 1);
 		}
 	}
 
@@ -494,6 +477,40 @@ static int dmz_iterate_devices(struct dm_target *ti, iterate_devices_callout_fn 
 }
 
 static void dmz_status(struct dm_target *ti, status_type_t type, unsigned int status_flags, char *result, unsigned int maxlen) {
+	pr_info("dmz_status is called.\n");
+
+	struct dmz_target *dmz = ti->private;
+	struct dmz_metadata *zmd = dmz->zmd;
+
+	// pr_info("*********************************\n");
+
+	for (int i = 0; i < 100; i++) {
+		int index = i / zmd->zone_nr_blocks;
+		int offset = i % zmd->zone_nr_blocks;
+
+		// pr_info("lba: %d, pba: %d \n", i, zmd->zone_start[index].mt[offset].block_id);
+	}
+	// pr_info("*********************************\n");
+
+	int ret = dmz_reclaim_zone(dmz, 0);
+
+	if (ret) {
+		pr_err("reclaim return non-null.\n");
+		return;
+	}
+
+	// pr_info("*********************************\n");
+
+	for (int i = 0; i < 100; i++) {
+		int index = i / zmd->zone_nr_blocks;
+		int offset = i % zmd->zone_nr_blocks;
+
+		// pr_info("lba: %d, pba: %d \n", i, zmd->zone_start[index].mt[offset].block_id);
+	}
+
+	// pr_info("*********************************\n");
+
+	// pr_info("result: %s\n", result);
 }
 
 /*

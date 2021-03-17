@@ -6,7 +6,7 @@ sudo dmesg --clear
 
 cd $(pwd)
 
-make
+sudo make
 
 sudo insmod dm-zoned.ko
 

@@ -4,15 +4,18 @@ int dmz_ctr_reclaim(void) {
 	return 0;
 }
 
-// TODO
 /**
  * @brief When GC has been started, valid blocks should be move to another zone. I need to update mapping, therefore ph
  * 
  * @param{unsigned long} pba 
  * @return{unsigned long} unsigned long 
  */
-unsigned long dmz_p2l(unsigned long pba) {
-	return 0;
+unsigned long dmz_p2l(struct dmz_metadata *zmd, unsigned long pba) {
+	int index = pba / zmd->zone_nr_blocks;
+	int offset = pba % zmd->zone_nr_blocks;
+
+	struct dm_zone *zone = &zmd->zone_start[index];
+	return (unsigned long)zone->reverse_mt[offset].block_id;
 }
 
 void dmz_reclaim_write_bio_endio(struct bio *bio) {
@@ -20,19 +23,16 @@ void dmz_reclaim_write_bio_endio(struct bio *bio) {
 	struct bio_vec *bv = bio->bi_io_vec;
 	struct page *page = bv->bv_page;
 	unsigned long buffer = page_address(page);
+	struct page *private = bio->bi_private;
 
 	// read failed.
 	if (bio->bi_status) {
-		set_page_dirty(page);
-		SetPageError(page);
+		set_page_dirty(private);
+		SetPageError(private);
 	}
-	end_page_writeback(page);
-	if (PageLocked(page)) {
-		unlock_page(page);
-	}
-
-	if (buffer) {
-		free_page(buffer);
+	end_page_writeback(private);
+	if (PageLocked(private)) {
+		unlock_page(private);
 	}
 
 	bio_put(bio);
@@ -43,13 +43,14 @@ void dmz_reclaim_read_bio_endio(struct bio *bio) {
 	struct bio_vec *bv = bio->bi_io_vec;
 	struct page *page = bv->bv_page;
 	unsigned long buffer = page_address(page);
+	struct page *private = bio->bi_private;
 
 	// read failed.
 	if (bio->bi_status) {
-		ClearPageUptodate(page);
-		SetPageError(page);
+		ClearPageUptodate(private);
+		SetPageError(private);
 	} else {
-		SetPageUptodate(page);
+		SetPageUptodate(private);
 	}
 	if (PageLocked(page)) {
 		unlock_page(page);
@@ -59,19 +60,18 @@ void dmz_reclaim_read_bio_endio(struct bio *bio) {
 }
 
 unsigned long dmz_reclaim_read_block(struct dmz_target *dmz, unsigned long pba) {
-	unsigned long buffer = __get_free_page(GFP_ATOMIC);
-	if (!buffer) {
+	struct dmz_metadata *zmd = dmz->zmd;
+	struct page *page = alloc_page(GFP_ATOMIC);
+	if (!page)
 		goto buffer_alloc;
-	}
-	struct page *page = virt_to_page(buffer);
+	unsigned long buffer = page_address(page);
 
 	struct bio *rbio = bio_alloc(GFP_ATOMIC, 1);
 	if (!rbio)
 		goto bio_alloc;
-	bio_set_dev(rbio, dmz->dev->bdev);
+	bio_set_dev(rbio, zmd->dev->bdev);
 	rbio->bi_iter.bi_sector = pba << 3;
-	rbio->bi_iter.bi_size = DMZ_BLOCK_SIZE;
-	rbio->bi_private = dmz;
+	rbio->bi_private = page;
 	// Here PAGE_SIZE = DMZ_BLOCK_SIZE = 4KB
 	bio_add_page(rbio, page, PAGE_SIZE, 0);
 	bio_set_op_attrs(rbio, REQ_OP_READ, 0);
@@ -102,6 +102,7 @@ buffer_alloc:
 }
 
 int dmz_reclaim_write_block(struct dmz_target *dmz, unsigned long pba, unsigned long buffer) {
+	struct dmz_metadata *zmd = dmz->zmd;
 	struct page *page = virt_to_page(buffer);
 	if (!page) {
 		goto invalid_kaddr;
@@ -110,20 +111,22 @@ int dmz_reclaim_write_block(struct dmz_target *dmz, unsigned long pba, unsigned 
 	struct bio *wbio = bio_alloc(GFP_ATOMIC, 1);
 	if (!wbio)
 		goto bio_alloc;
-	bio_set_dev(wbio, dmz->dev->bdev);
+	bio_set_dev(wbio, zmd->dev->bdev);
 	wbio->bi_iter.bi_sector = pba << 3;
-	wbio->bi_iter.bi_size = DMZ_BLOCK_SIZE;
-	wbio->bi_private = dmz;
+	wbio->bi_private = page;
 	// Here PAGE_SIZE = DMZ_BLOCK_SIZE = 4KB
 	bio_add_page(wbio, page, PAGE_SIZE, 0);
 	bio_set_op_attrs(wbio, REQ_OP_WRITE, 0);
 	set_page_writeback(page);
 	wbio->bi_end_io = dmz_reclaim_write_bio_endio;
+	submit_bio(wbio);
 	wait_on_page_writeback(page);
 
 	if (PageDirty(page)) {
 		goto write_err;
 	}
+
+	free_page(buffer);
 
 	return 0;
 
@@ -134,7 +137,31 @@ write_err:
 	return 1;
 }
 
-// TODO
+/**
+ * @brief return zone_id which free block is available
+ * Note: Here zone under reclaim should not be chosen as target zone.
+ * 
+ * @param dmz 
+ * @return int 
+ */
+unsigned long dmz_reclaim_pba_alloc(struct dmz_target *dmz, int reclaim_zone) {
+	struct dmz_metadata *zmd = dmz->zmd;
+	unsigned long flags;
+
+	for (int i = 0; i < zmd->nr_zones; i++) {
+		if (i == reclaim_zone)
+			continue;
+		// spin_lock_irqsave(&zmd->meta_lock, flags);
+		if (zmd->zone_start[i].wp < zmd->zone_nr_blocks) {
+			// spin_unlock_irqrestore(&zmd->meta_lock, flags);
+			return i * zmd->zone_nr_blocks + zmd->zone_start[i].wp;
+		}
+		// spin_unlock_irqrestore(&zmd->meta_lock, flags);
+	}
+
+	return ~0;
+}
+
 /**
  * @brief Reclaim a zone need to put all valid blocks in other one or several zones which has enough free space.
  * I need to make a bio to do this job.
@@ -147,16 +174,29 @@ write_err:
  * @param{void *func(struct bio*)} endio 
  * @return{struct bio*} a bio waiting to be submitted
  */
-int dmz_make_reclaim_bio(struct dmz_target *dmz, unsigned long lba, unsigned long pba) {
+int dmz_make_reclaim_bio(struct dmz_target *dmz, unsigned long lba) {
+	struct dmz_metadata *zmd = dmz->zmd;
 	int ret = 0;
+
+	int index = lba / zmd->zone_nr_blocks, offset = lba % zmd->zone_nr_blocks;
+	unsigned long pba = zmd->zone_start[index].mt[offset].block_id;
 
 	unsigned long buffer = dmz_reclaim_read_block(dmz, pba);
 	if (!buffer) {
 		goto read_err;
 	}
 
-	unsigned long new_pba = dmz_pba_alloc(dmz);
+	unsigned long new_pba = dmz_reclaim_pba_alloc(dmz, pba / zmd->zone_nr_blocks);
+	if (dmz_is_default_pba(new_pba)) {
+		pr_err("alloc new_pba err.\n");
+		goto alloc_err;
+	}
 	ret = dmz_reclaim_write_block(dmz, new_pba, buffer);
+	if (!ret) {
+		zmd->zone_start[new_pba / zmd->zone_nr_blocks].wp += 1;
+	}
+
+	pr_info("new_pba: %d\n", new_pba);
 
 	if (!ret) {
 		dmz_update_map(dmz, lba, new_pba);
@@ -164,47 +204,45 @@ int dmz_make_reclaim_bio(struct dmz_target *dmz, unsigned long lba, unsigned lon
 
 	return ret;
 
+alloc_err:
 read_err:
 	return -1;
 }
 
 /*
-* free first zone
+* Reclaim specified zone.
 */
 int dmz_reclaim_zone(struct dmz_target *dmz, int zone) {
 	struct dmz_metadata *zmd = dmz->zmd;
-	unsigned long flags;
+	unsigned long flags, sgth_flags;
 	unsigned long remain = 0;
 	struct dm_zone *cur_zone = zmd->zone_start;
 
-	for (int zone_i = 0; zone_i < zmd->nr_zones; zone_i++) {
-		if (zone_i == zone)
-			continue;
+	// spin_lock_irqsave(&dmz->single_thread_lock, sgth_flags);
 
-		cur_zone = zmd->zone_start + zone_i;
-		unsigned long *bitmap = cur_zone->bitmap;
-		unsigned int wp = cur_zone->wp;
-		struct dmz_map *map = cur_zone->mt;
+	cur_zone = &zmd->zone_start[zone];
+	unsigned long *bitmap = cur_zone->bitmap;
+	unsigned int wp = cur_zone->wp;
+	struct dmz_map *map = cur_zone->mt;
 
-		for (unsigned long offset = 0; offset < zmd->zone_nr_blocks; offset++) {
-			unsigned long valid_bitmap = bitmap_get_value8(bitmap, offset);
+	// for (unsigned long offset = 0; offset < zmd->zone_nr_blocks; offset++) {
+	for (unsigned long offset = 0; offset < 100; offset++) {
+		unsigned long valid_bitmap = bitmap_get_value8(bitmap, offset);
 
-			// first bit indicates blocks at this offset is whether valid
-			if (valid_bitmap & (0x1 << 7)) {
-				unsigned long pba = dmz_pba_alloc(dmz);
-				struct bio *reclaim_bio = dmz_make_reclaim_bio(dmz, dmz_p2l(zone_i * zmd->zone_nr_blocks + offset), pba);
-
-				if (!reclaim_bio)
-					goto make_bio;
-
-				// TODO Write lock should be applied.
-				submit_bio_noacct(reclaim_bio);
-			}
+		// First bit indicates blocks at this offset is valid or not.
+		if (valid_bitmap & (0x1 << 7)) {
+			int ret = dmz_make_reclaim_bio(dmz, dmz_p2l(zmd, zone * zmd->zone_nr_blocks + offset));
+			// 	if (ret) {
+			// 		pr_err("FUCK~\n");
+			// 	}
 		}
 	}
+
+	// spin_unlock_irqrestore(&dmz->single_thread_lock, sgth_flags);
 
 	return 0;
 
 make_bio:
+	// spin_unlock_irqrestore(&dmz->single_thread_lock, sgth_flags);
 	return -1;
 }

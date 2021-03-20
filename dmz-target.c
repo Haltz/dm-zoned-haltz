@@ -68,6 +68,25 @@ static void dmz_check_meta(struct dmz_target *dmz) {
 	struct dmz_metadata *zmd = dmz->zmd;
 }
 
+static int dmz_init_zones_type(struct blk_zone *blkz, unsigned int num, void *data) {
+	struct dmz_zone *zone = (struct dmz_zone *)data;
+	struct dmz_zone *cur_zone = &zone[num];
+
+	switch (blkz->type) {
+	case BLK_ZONE_TYPE_CONVENTIONAL:
+		cur_zone->type = DMZ_ZONE_RND;
+		break;
+	case BLK_ZONE_TYPE_SEQWRITE_REQ:
+	case BLK_ZONE_TYPE_SEQWRITE_PREF:
+		cur_zone->type = DMZ_ZONE_SEQ;
+		break;
+	default:
+		cur_zone->type = DMZ_ZONE_NONE;
+	}
+
+	return 0;
+}
+
 /* Initilize device mapper */
 static int dmz_ctr(struct dm_target *ti, unsigned int argc, char **argv) {
 	// pr_info("[dmz]: ctr Called.\n");
@@ -134,13 +153,18 @@ static int dmz_ctr(struct dm_target *ti, unsigned int argc, char **argv) {
 	ti->flush_supported = false;
 	ti->discards_supported = true;
 
+	ret = blkdev_report_zones(zmd->dev->bdev, 0, BLK_ALL_ZONES, dmz_init_zones_type, zmd->zone_start);
+	if (ret) {
+		// FIXME E
+		pr_err("Errno is 80, but callback is excuted correctly, how to fix it?\n");
+	}
+
 	dmz_check_meta(dmz);
 
 	return 0;
 }
 
 static void dmz_dtr(struct dm_target *ti) {
-	// pr_info("[dmz]: dtr Called.");
 	struct dmz_target *dmz = ti->private;
 	dmz_put_zoned_device(ti);
 
@@ -150,13 +174,13 @@ static void dmz_dtr(struct dm_target *ti) {
 
 	dmz_dtr_metadata(dmz->zmd);
 	if (dmz->ddev) {
-		// kfree(dmz->ddev);
+		kfree(dmz->ddev);
 	}
 	if (dmz->dev) {
-		// kfree(dmz->dev);
+		kfree(dmz->dev);
 	}
 
-	// kfree(dmz);
+	kfree(dmz);
 }
 
 // return zone_id which free block is available
@@ -181,7 +205,7 @@ u64 dmz_get_map(struct dmz_metadata *zmd, u64 lba) {
 	u64 index = lba / zmd->zone_nr_blocks;
 	u64 offset = lba % zmd->zone_nr_blocks;
 
-	struct dm_zone *cur_zone = zmd->zone_start + index;
+	struct dmz_zone *cur_zone = zmd->zone_start + index;
 	u64 ret = (cur_zone->mt + offset)->block_id;
 
 	// pr_info("index: %llx, offset: %llx, pba: %llx\n", index, offset, ret);
@@ -222,7 +246,7 @@ void dmz_update_map(struct dmz_target *dmz, unsigned long lba, unsigned long pba
 	int offset = lba % zmd->zone_nr_blocks;
 	unsigned long flags;
 
-	struct dm_zone *cur_zone = &zmd->zone_start[index];
+	struct dmz_zone *cur_zone = &zmd->zone_start[index];
 	// spin_lock_irqsave(&zmd->maptable_lock, flags);
 	unsigned long old_pba = cur_zone->mt[offset].block_id;
 	cur_zone->mt[offset].block_id = pba;
@@ -230,17 +254,22 @@ void dmz_update_map(struct dmz_target *dmz, unsigned long lba, unsigned long pba
 
 	int p_index = pba / zmd->zone_nr_blocks;
 	int p_offset = pba % zmd->zone_nr_blocks;
-	struct dm_zone *p_zone = &zmd->zone_start[p_index];
+	struct dmz_zone *p_zone = &zmd->zone_start[p_index];
 	p_zone->reverse_mt[p_offset].block_id = lba;
 
 	int old_p_index = old_pba / zmd->zone_nr_blocks;
-	int old_p_offset = old_pba / zmd->zone_nr_blocks;
-	struct dm_zone *old_p_zone = &zmd->zone_start[old_p_index];
+	int old_p_offset = old_pba % zmd->zone_nr_blocks;
+	struct dmz_zone *old_p_zone = &zmd->zone_start[old_p_index];
 	old_p_zone->reverse_mt[old_p_offset].block_id = ~0;
 
 	// update bitmap
-	bitmap_clear(zmd->bitmap_start, old_pba, 1);
-	bitmap_set(zmd->bitmap_start, pba, 1);
+	int old_v;
+
+	old_v = bitmap_get_value8(zmd->bitmap_start, old_pba);
+	bitmap_set_value8(zmd->bitmap_start, old_v & 0x7f, old_pba);
+
+	old_v = bitmap_get_value8(zmd->bitmap_start, pba);
+	bitmap_set_value8(zmd->bitmap_start, old_v | 0x80, pba);
 }
 
 static void dmz_clone_endio(struct bio *clone) {
@@ -481,36 +510,14 @@ static void dmz_status(struct dm_target *ti, status_type_t type, unsigned int st
 
 	struct dmz_target *dmz = ti->private;
 	struct dmz_metadata *zmd = dmz->zmd;
+	int ret = 0;
 
-	// pr_info("*********************************\n");
-
-	for (int i = 0; i < 100; i++) {
-		int index = i / zmd->zone_nr_blocks;
-		int offset = i % zmd->zone_nr_blocks;
-
-		// pr_info("lba: %d, pba: %d \n", i, zmd->zone_start[index].mt[offset].block_id);
-	}
-	// pr_info("*********************************\n");
-
-	int ret = dmz_reclaim_zone(dmz, 0);
+	ret = dmz_reclaim_zone(dmz, 0);
 
 	if (ret) {
 		pr_err("reclaim return non-null.\n");
 		return;
 	}
-
-	// pr_info("*********************************\n");
-
-	for (int i = 0; i < 100; i++) {
-		int index = i / zmd->zone_nr_blocks;
-		int offset = i % zmd->zone_nr_blocks;
-
-		// pr_info("lba: %d, pba: %d \n", i, zmd->zone_start[index].mt[offset].block_id);
-	}
-
-	// pr_info("*********************************\n");
-
-	// pr_info("result: %s\n", result);
 }
 
 /*

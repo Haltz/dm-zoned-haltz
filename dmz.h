@@ -27,8 +27,6 @@
 #include <linux/bio.h>
 #include <linux/log2.h>
 
-#define PROBE(message) pr_info("%s", message);
-
 #define KB (1 << 10)
 #define MB (1 << 20)
 #define GB (1 << 30)
@@ -72,9 +70,13 @@
 // default pba which value is 0x ffff ffff ffff ffff indicates that lba is not wrote yet
 #define dmz_is_default_pba(pba) (!(~pba))
 
+#define DMZ_IS_SEQ(zone) (zone->type == DMZ_ZONE_SEQ)
+#define DMZ_IS_RND(zone) (zone->type == DMZ_ZONE_RND)
+
 #define DMZ_MIN_BIOS 8192
 
 enum DMZ_STATUS { DMZ_BLOCK_FREE, DMZ_BLOCK_INVALID, DMZ_BLOCK_VALID };
+enum DMZ_ZONE_TYPE { DMZ_ZONE_NONE, DMZ_ZONE_SEQ, DMZ_ZONE_RND };
 
 /*
  * Super block information (one per metadata set).
@@ -84,7 +86,7 @@ struct dmz_sb {
 	struct dmz_dev *dev;
 	struct dmz_mblk *mblk;
 	struct dmz_super *sb;
-	struct dm_zone *zone;
+	struct dmz_zone *zone;
 };
 
 struct dmz_metadata {
@@ -111,7 +113,7 @@ struct dmz_metadata {
 
 	struct dmz_super *sb;
 
-	struct dm_zone *zone_start;
+	struct dmz_zone *zone_start;
 	struct dmz_map *map_start;
 	unsigned long *bitmap_start;
 
@@ -158,7 +160,7 @@ struct dmz_target {
 	spinlock_t single_thread_lock;
 };
 
-struct dm_zone {
+struct dmz_zone {
 	// struct dmz_dev *dev;
 	// unsigned long flags;
 	// atomic_t refcount;
@@ -167,6 +169,8 @@ struct dm_zone {
 	unsigned int weight;
 	// unsigned int physical_zone;
 	unsigned long *bitmap;
+
+	int type;
 
 	// Mapping Table
 	struct dmz_map *mt;

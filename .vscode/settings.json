@@ -1,6 +1,11 @@
 {
 	"files.associations": {
         "dm-zoned.h": "c",
-        "stdio.h": "c"
+        "stdio.h": "c",
+        "atomic": "c",
+        "fstream": "c",
+        "string": "c",
+        "*.tcc": "c",
+        "sstream": "c"
     }
 }

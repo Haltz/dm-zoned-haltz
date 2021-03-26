@@ -187,5 +187,6 @@ u64 dmz_get_map(struct dmz_metadata *zmd, u64 lba);
 void dmz_update_map(struct dmz_target *dmz, unsigned long lba, unsigned long pba);
 
 int dmz_pba_alloc(struct dmz_target *dmz);
+int dmz_flush(struct dmz_target *dmz);
 
 #endif

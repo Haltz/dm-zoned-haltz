@@ -1,10 +1,9 @@
 #include "dmz.h"
 
-/*
-* Allocate discrete memory for mapping table.
-* Find mapping based on index.
-*/
-struct dmz_map *dmz_allocate_mapping_table(size_t size) {
-	struct dmz_map *map = kcalloc(size, sizeof(struct dmz_map), GFP_ATOMIC);
-	return map;
+unsigned long dmz_dev_capacity(struct dmz_target *dmz) {
+	blkdev_ioctl(dmz->dev->bdev, 0, BLKGETSIZE, 0);
+}
+
+int dmz_flush(struct dmz_target *dmz) {
+	return 0;
 }

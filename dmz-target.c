@@ -1,5 +1,7 @@
 #include "dmz.h"
 
+#define BIO_IS_FLUSH(bio) (bio_op(bio) == REQ_OP_FLUSH)
+
 enum { DMZ_BLK_FREE, DMZ_BLK_VALID, DMZ_BLK_INVALID };
 enum { DMZ_UNMAPPED, DMZ_MAPPED };
 
@@ -89,7 +91,6 @@ static int dmz_init_zones_type(struct blk_zone *blkz, unsigned int num, void *da
 
 /* Initilize device mapper */
 static int dmz_ctr(struct dm_target *ti, unsigned int argc, char **argv) {
-	// pr_info("[dmz]: ctr Called.\n");
 	if (argc > 1 || argc == 0) {
 		ti->error = "Invalid argument count";
 		pr_err("ZBD number is invalid. Only 1 supported.");
@@ -289,6 +290,11 @@ static void dmz_clone_endio(struct bio *clone) {
 	} else {
 	}
 
+	int index = clone_bioctx->new_pba / zmd->zone_nr_blocks, offset = clone_bioctx->new_pba % zmd->zone_nr_blocks;
+	if (offset > zmd->zone_nr_blocks) {
+		dmz_reclaim_zone(dmz, index);
+	}
+
 	if (refcount_dec_if_one(&bioctx->ref)) {
 		dmz_bio_endio(bioctx->bio, status);
 	}
@@ -407,6 +413,10 @@ static int dmz_handle_read(struct dmz_target *dmz, struct bio *bio) {
 static int dmz_handle_write(struct dmz_target *dmz, struct bio *bio) {
 	// pr_info("Write as Follows.\n");
 
+	if (BIO_IS_FLUSH(bio)) {
+		dmz_flush(dmz);
+	}
+
 	// flush bio
 	if (!bio->bi_iter.bi_size) {
 		// pr_err("flush is not supported tempoarily.\n");
@@ -511,8 +521,6 @@ static void dmz_status(struct dm_target *ti, status_type_t type, unsigned int st
 	struct dmz_target *dmz = ti->private;
 	struct dmz_metadata *zmd = dmz->zmd;
 	int ret = 0;
-
-	ret = dmz_reclaim_zone(dmz, 0);
 
 	if (ret) {
 		pr_err("reclaim return non-null.\n");

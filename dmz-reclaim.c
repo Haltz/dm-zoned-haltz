@@ -218,9 +218,14 @@ int dmz_reclaim_zone(struct dmz_target *dmz, int zone) {
 	unsigned long flags, sgth_flags;
 	unsigned long remain = 0;
 	struct dmz_zone *cur_zone = &zmd->zone_start[zone];
-	int ret = 0;
+	int ret = 0, locked = 0;
 
-	spin_lock_irqsave(&dmz->single_thread_lock, sgth_flags);
+	if (!spin_is_locked(&dmz->single_thread_lock)) {
+		locked = 0;
+		spin_lock_irqsave(&dmz->single_thread_lock, sgth_flags);
+	} else {
+		locked = 1;
+	}
 
 	unsigned long *bitmap = cur_zone->bitmap;
 	unsigned int wp = cur_zone->wp;
@@ -254,9 +259,12 @@ int dmz_reclaim_zone(struct dmz_target *dmz, int zone) {
 		ret = blkdev_zone_mgmt(zmd->dev->bdev, REQ_OP_ZONE_RESET, zmd->zone_nr_sectors * zone, zmd->zone_nr_sectors, GFP_NOIO);
 	} else {
 	}
+
 	if (ret)
-		pr_err("FUCK~ %d\n", ret);
-	spin_unlock_irqrestore(&dmz->single_thread_lock, sgth_flags);
+		pr_err("blkdev_zone_mgmt errcode %d\n", ret);
+
+	if (locked)
+		spin_unlock_irqrestore(&dmz->single_thread_lock, sgth_flags);
 
 	return 0;
 

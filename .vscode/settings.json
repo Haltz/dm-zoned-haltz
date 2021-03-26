@@ -6,6 +6,8 @@
         "fstream": "c",
         "string": "c",
         "*.tcc": "c",
-        "sstream": "c"
+        "sstream": "c",
+        "dmz.h": "c",
+        "mm.h": "c"
     }
 }

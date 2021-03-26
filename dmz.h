@@ -114,7 +114,6 @@ struct dmz_metadata {
 	struct dmz_super *sb;
 
 	struct dmz_zone *zone_start;
-	struct dmz_map *map_start;
 	unsigned long *bitmap_start;
 
 	// first useable block number.

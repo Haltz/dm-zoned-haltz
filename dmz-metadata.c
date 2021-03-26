@@ -285,6 +285,7 @@ int dmz_get_metadata(struct dmz_metadata *zmd) {
 
 	zmd->nr_blocks = zmd->capacity >> 3; // the unit of capacity is sectors
 
+	// one mapping occpy 8 bytes, 4KB block can contain 4K/8=512 mappings. bits to right shift is ilog2(512)=9
 	zmd->nr_map_blocks = zmd->nr_blocks >> 9;
 	zmd->nr_bitmap_blocks = zmd->nr_blocks >> 15;
 

@@ -85,7 +85,7 @@ int dmz_flush(struct dmz_target *dmz) {
 		dmz_write_block(zmd, dmz_pba_alloc(dmz), virt_to_page((unsigned long)rmap));
 	}
 
-	if (locked) {
+	if (!locked) {
 		spin_unlock_irqrestore(&dmz->single_thread_lock, flags);
 	}
 	return 0;

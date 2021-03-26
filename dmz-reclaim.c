@@ -263,7 +263,7 @@ int dmz_reclaim_zone(struct dmz_target *dmz, int zone) {
 	if (ret)
 		pr_err("blkdev_zone_mgmt errcode %d\n", ret);
 
-	if (locked)
+	if (!locked)
 		spin_unlock_irqrestore(&dmz->single_thread_lock, sgth_flags);
 
 	return 0;

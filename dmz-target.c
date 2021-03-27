@@ -242,6 +242,7 @@ static void dmz_bio_endio(struct bio *bio, blk_status_t status) {
 }
 
 void dmz_update_map(struct dmz_target *dmz, unsigned long lba, unsigned long pba) {
+	// pr_err("%x %x\n", lba, pba);
 	struct dmz_metadata *zmd = dmz->zmd;
 	int index = lba / zmd->zone_nr_blocks;
 	int offset = lba % zmd->zone_nr_blocks;
@@ -258,16 +259,20 @@ void dmz_update_map(struct dmz_target *dmz, unsigned long lba, unsigned long pba
 	struct dmz_zone *p_zone = &zmd->zone_start[p_index];
 	p_zone->reverse_mt[p_offset].block_id = lba;
 
-	int old_p_index = old_pba / zmd->zone_nr_blocks;
-	int old_p_offset = old_pba % zmd->zone_nr_blocks;
-	struct dmz_zone *old_p_zone = &zmd->zone_start[old_p_index];
-	old_p_zone->reverse_mt[old_p_offset].block_id = ~0;
+	if (!dmz_is_default_pba(old_pba)) {
+		int old_p_index = old_pba / zmd->zone_nr_blocks;
+		int old_p_offset = old_pba % zmd->zone_nr_blocks;
+		struct dmz_zone *old_p_zone = &zmd->zone_start[old_p_index];
+		old_p_zone->reverse_mt[old_p_offset].block_id = ~0;
+	}
 
 	// update bitmap
 	int old_v;
 
-	old_v = bitmap_get_value8(zmd->bitmap_start, old_pba);
-	bitmap_set_value8(zmd->bitmap_start, old_v & 0x7f, old_pba);
+	if (!dmz_is_default_pba(old_pba)) {
+		old_v = bitmap_get_value8(zmd->bitmap_start, old_pba);
+		bitmap_set_value8(zmd->bitmap_start, old_v & 0x7f, old_pba);
+	}
 
 	old_v = bitmap_get_value8(zmd->bitmap_start, pba);
 	bitmap_set_value8(zmd->bitmap_start, old_v | 0x80, pba);

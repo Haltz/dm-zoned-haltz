@@ -78,11 +78,22 @@ int dmz_flush(struct dmz_target *dmz) {
 	}
 
 	struct dmz_zone *zone = zmd->zone_start;
-	int prev = 0;
+	unsigned long prev = ~0, chosen = 0;
+	// find minimum weight zone
+	for (int i = 0; i < zmd->nr_map_blocks; i++) {
+		if ((&zone[i])->wp < prev) {
+			prev = (&zone[i])->wp;
+			chosen = i;
+		}
+	}
+	dmz_reclaim_zone(dmz, chosen);
+
+	prev = -1;
 	for (int i = 0; i < zmd->nr_map_blocks; i++) {
 		struct dmz_map *map = zone[i].mt, *rmap = zone[i].reverse_mt;
-		dmz_write_block(zmd, dmz_pba_alloc(dmz), virt_to_page((unsigned long)map));
-		dmz_write_block(zmd, dmz_pba_alloc(dmz), virt_to_page((unsigned long)rmap));
+		// here IO must complete before func return.
+		dmz_write_block(zmd, (&zone[chosen])->wp++, virt_to_page((unsigned long)map));
+		dmz_write_block(zmd, (&zone[chosen])->wp++, virt_to_page((unsigned long)rmap));
 	}
 
 	if (!locked) {

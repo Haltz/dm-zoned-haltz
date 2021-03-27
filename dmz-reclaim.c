@@ -214,6 +214,7 @@ read_err:
 * Reclaim specified zone.
 */
 int dmz_reclaim_zone(struct dmz_target *dmz, int zone) {
+	pr_info("Reclaim Zone %d.\n", zone);
 	struct dmz_metadata *zmd = dmz->zmd;
 	unsigned long flags, sgth_flags;
 	unsigned long remain = 0;

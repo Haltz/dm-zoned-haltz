@@ -72,7 +72,7 @@ read_err:
 	return -1;
 }
 
-int dmz_determine_target_zone(struct dmz_metadata *zmd, int need, int *wp_after_flush, int *target_zones, int index) {
+int dmz_determine_target_zone(struct dmz_metadata *zmd, int need, unsigned long *wp_after_flush, unsigned long *target_zones, int index) {
 	struct dmz_zone *zone = zmd->zone_start;
 	unsigned long wp;
 	int target_zone = ~0;
@@ -96,7 +96,7 @@ int dmz_determine_target_zone(struct dmz_metadata *zmd, int need, int *wp_after_
 int dmz_flush_do(struct dmz_target *dmz) {
 	struct dmz_metadata *zmd = dmz->zmd;
 	struct dmz_zone *zone = zmd->zone_start;
-	struct bitmap *bitmap = zmd->bitmap_start;
+	unsigned long *bitmap = zmd->bitmap_start;
 	unsigned long flags;
 	int ret = 0, reclaim_zone = 0;
 
@@ -140,7 +140,7 @@ repeat_try:
 		}
 	}
 
-	int zone_struct_target_zonewp;
+	unsigned long zone_struct_target_zonewp;
 	if (dmz_determine_target_zone(zmd, nr_zone_struct_need_blocks, wp_after_flush, &zone_struct_target_zonewp, 0)) {
 		goto again;
 	}
@@ -202,7 +202,7 @@ again:
 	if (reclaim_zone >= zmd->nr_zones)
 		goto fail;
 
-	dmz_reclaim_zone(zmd, reclaim_zone++);
+	dmz_reclaim_zone(dmz, reclaim_zone++);
 	goto repeat_try;
 }
 
@@ -234,7 +234,7 @@ int dmz_flush(struct dmz_target *dmz) {
 	}
 
 	// predicate mappings, bitmap, zones, metadata after flush and then do the flush.
-	ret = dmz_flush_do(zmd);
+	ret = dmz_flush_do(dmz);
 	if (ret) {
 		pr_err("flush failed.\n");
 	}

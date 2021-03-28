@@ -78,15 +78,12 @@
 enum DMZ_STATUS { DMZ_BLOCK_FREE, DMZ_BLOCK_INVALID, DMZ_BLOCK_VALID };
 enum DMZ_ZONE_TYPE { DMZ_ZONE_NONE, DMZ_ZONE_SEQ, DMZ_ZONE_RND };
 
-/*
- * Super block information (one per metadata set).
- */
-struct dmz_sb {
-	sector_t block;
-	struct dmz_dev *dev;
-	struct dmz_mblk *mblk;
-	struct dmz_super *sb;
-	struct dmz_zone *zone;
+struct dmz_super {
+	u64 magic; // 8
+
+	u64 zones_info; // 8;
+
+	u8 reserved[496];
 };
 
 struct dmz_metadata {
@@ -95,29 +92,28 @@ struct dmz_metadata {
 	u64 capacity;
 	char name[BDEVNAME_SIZE];
 
-	sector_t mapping_size;
-	sector_t bitmap_size;
+	unsigned long mapping_size;
+	unsigned long bitmap_size;
 
-	sector_t nr_zones;
-	sector_t nr_blocks;
+	unsigned long nr_zones;
+	unsigned long nr_blocks;
 
-	sector_t zone_nr_sectors;
-	sector_t zone_nr_blocks;
+	unsigned long zone_nr_sectors;
+	unsigned long zone_nr_blocks;
 
-	sector_t nr_map_blocks;
-	sector_t nr_bitmap_blocks;
+	unsigned long nr_map_blocks;
+	unsigned long nr_bitmap_blocks;
 
-	sector_t sb_block;
-	sector_t map_block;
-	sector_t bitmap_block;
+	int nr_zone_mt_need_blocks;
+	int nr_zone_bitmap_need_blocks;
+	int nr_zone_struct_need_blocks;
 
-	struct dmz_super *sb;
+	struct dmz_super *sblk;
 
 	struct dmz_zone *zone_start;
 	unsigned long *bitmap_start;
 
-	// first useable block number.
-	unsigned long useable_start;
+	int useable_start;
 
 	// locks
 	spinlock_t meta_lock;
@@ -160,21 +156,23 @@ struct dmz_target {
 };
 
 struct dmz_zone {
-	// struct dmz_dev *dev;
-	// unsigned long flags;
-	// atomic_t refcount;
-	// unsigned int id;
-	unsigned int wp;
-	unsigned int weight;
-	// unsigned int physical_zone;
-	unsigned long *bitmap;
+	unsigned int wp; // 4
+	unsigned int weight; // 4
+	unsigned long *bitmap; // 8
 
-	int type;
+	int type; // 4
 
 	// Mapping Table
-	struct dmz_map *mt;
-	// Reverse Mapping Table
-	struct dmz_map *reverse_mt;
+	struct dmz_map *mt; // 8
+	// Reverse Mapping Table，when block store mappings(which has no lba), store corresponding zone.
+	struct dmz_map *reverse_mt; // 8
+
+	// mt block pbn
+	unsigned long mt_blk_n; // 8
+	// reverse mt block pbn
+	unsigned long rmt_blk_n; // 8
+	// bitmap block pbn
+	unsigned long bitmap_blk_n; // 8
 };
 
 int dmz_ctr_metadata(struct dmz_target *);

@@ -70,25 +70,6 @@ static void dmz_check_meta(struct dmz_target *dmz) {
 	struct dmz_metadata *zmd = dmz->zmd;
 }
 
-static int dmz_init_zones_type(struct blk_zone *blkz, unsigned int num, void *data) {
-	struct dmz_zone *zone = (struct dmz_zone *)data;
-	struct dmz_zone *cur_zone = &zone[num];
-
-	switch (blkz->type) {
-	case BLK_ZONE_TYPE_CONVENTIONAL:
-		cur_zone->type = DMZ_ZONE_RND;
-		break;
-	case BLK_ZONE_TYPE_SEQWRITE_REQ:
-	case BLK_ZONE_TYPE_SEQWRITE_PREF:
-		cur_zone->type = DMZ_ZONE_SEQ;
-		break;
-	default:
-		cur_zone->type = DMZ_ZONE_NONE;
-	}
-
-	return 0;
-}
-
 /* Initilize device mapper */
 static int dmz_ctr(struct dm_target *ti, unsigned int argc, char **argv) {
 	if (argc > 1 || argc == 0) {
@@ -153,12 +134,6 @@ static int dmz_ctr(struct dm_target *ti, unsigned int argc, char **argv) {
 	ti->per_io_data_size = sizeof(struct dmz_bioctx);
 	ti->flush_supported = false;
 	ti->discards_supported = true;
-
-	ret = blkdev_report_zones(zmd->dev->bdev, 0, BLK_ALL_ZONES, dmz_init_zones_type, zmd->zone_start);
-	if (ret) {
-		// FIXME E
-		pr_err("Errno is 80, but callback is excuted correctly, how to fix it?\n");
-	}
 
 	dmz_check_meta(dmz);
 

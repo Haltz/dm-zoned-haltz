@@ -213,6 +213,7 @@ read_err:
 /*
 * Reclaim specified zone.
 */
+// TODO support flush (seems no need, because all metadata is in memory)
 int dmz_reclaim_zone(struct dmz_target *dmz, int zone) {
 	pr_info("Reclaim Zone %d.\n", zone);
 	struct dmz_metadata *zmd = dmz->zmd;

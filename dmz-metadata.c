@@ -300,12 +300,12 @@ void dmz_dtr_metadata(struct dmz_metadata *zmd) {
 		return;
 
 	if (zmd->sblk) {
-		kfree(zmd->sblk);
+		free_page(zmd->sblk);
 	}
 
-	// dmz_unload_bitmap(zmd);
-	// dmz_unload_zones(zmd);
+	dmz_unload_bitmap(zmd);
+	dmz_unload_zones(zmd);
 
-	// if (zmd)
-	// 	kfree(zmd);
+	if (zmd)
+		kfree(zmd);
 }

@@ -148,7 +148,7 @@ static void dmz_dtr(struct dm_target *ti) {
 		return;
 	}
 
-	// dmz_dtr_metadata(dmz->zmd);
+	dmz_dtr_metadata(dmz->zmd);
 	if (dmz->ddev) {
 		kfree(dmz->ddev);
 	}
@@ -291,7 +291,6 @@ static int dmz_submit_bio(struct dmz_target *dmz, struct bio *bio) {
 	sector_t nr_sectors = bio_sectors(bio), logic_sector = bio->bi_iter.bi_sector;
 	sector_t nr_blocks = dmz_sect2blk(nr_sectors), lba = dmz_sect2blk(logic_sector);
 
-
 	bioctx->dev = zmd->dev;
 
 	for (int i = 0; i < nr_blocks; i++) {
@@ -345,7 +344,6 @@ static int dmz_submit_bio(struct dmz_target *dmz, struct bio *bio) {
 			}
 		} else {
 			if (op == REQ_OP_WRITE) {
-
 				// alloc a free block to write.
 				int zone_id = dmz_pba_alloc(dmz);
 
@@ -358,7 +356,6 @@ static int dmz_submit_bio(struct dmz_target *dmz, struct bio *bio) {
 				clone_bioctx->new_pba = pba;
 				// pr_info("W: lba: %llx, pba: %lx\n", lba + i, clone_bioctx->new_pba);
 			} else {
-
 				// pr_info("R: lba: %llx, pba: %lx\n", lba + i, clone_bioctx->old_pba);
 			}
 		}

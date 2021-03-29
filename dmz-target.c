@@ -142,6 +142,7 @@ static int dmz_ctr(struct dm_target *ti, unsigned int argc, char **argv) {
 
 static void dmz_dtr(struct dm_target *ti) {
 	struct dmz_target *dmz = ti->private;
+
 	dmz_put_zoned_device(ti);
 
 	if (!dmz) {
@@ -501,6 +502,8 @@ static void dmz_status(struct dm_target *ti, status_type_t type, unsigned int st
 	struct dmz_target *dmz = ti->private;
 	struct dmz_metadata *zmd = dmz->zmd;
 	int ret = 0;
+
+	ret = dmz_flush(dmz);
 
 	if (ret) {
 		pr_err("reclaim return non-null.\n");

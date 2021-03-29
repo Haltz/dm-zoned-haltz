@@ -100,7 +100,10 @@ int dmz_flush_do(struct dmz_target *dmz) {
 	unsigned long flags;
 	int ret = 0, reclaim_zone = 0;
 
-	dmz_reclaim_zone(dmz, reclaim_zone++);
+	ret = dmz_reclaim_zone(dmz, reclaim_zone++);
+	if (ret) {
+		pr_err("Recalim failed.\n");
+	}
 	zone[0].wp = 1;
 
 	// compute how many blocks mappings, reverser mappings, bitmap, metadata needs.
@@ -126,6 +129,7 @@ repeat_try:
 	bitmap_target_zones = kcalloc(zmd->nr_zones, sizeof(unsigned long), GFP_KERNEL);
 
 	if (!wp_after_flush || !mapping_target_zones || !rmapping_target_zones || !bitmap_target_zones) {
+		pr_info("alloc wp arrays failed.\n");
 		goto fail;
 	}
 
@@ -160,24 +164,39 @@ repeat_try:
 	}
 
 	struct page *sblk_page = alloc_page(GFP_KERNEL);
-	if (!sblk_page)
+	if (!sblk_page) {
+		pr_info("alloc page failed.\n");
 		goto fail;
+	}
 	struct dmz_super *super = (struct dmz_super *)page_address(sblk_page);
+	memcpy(super, zmd->sblk, 512);
 	super->magic = ~0;
 	super->zones_info = zone_struct_target_zonewp;
 	zone[zone_struct_target_zonewp / zmd->zone_nr_blocks].wp += nr_zone_struct_need_blocks;
 
-	dmz_write_block(zmd, 0, virt_to_page(super));
+	ret = dmz_write_block(zmd, 0, virt_to_page(super));
+	if (ret) {
+		pr_err("write failed.\n");
+	}
 
 	for (int i = 0; i < zmd->nr_zones; i++) {
 		for (int j = 0; j < nr_zone_mt_need_blocks; j++) {
-			dmz_write_block(zmd, zone[i].mt_blk_n + j, virt_to_page(zone[i].mt));
+			ret = dmz_write_block(zmd, zone[i].mt_blk_n + j, virt_to_page(zone[i].mt));
+			if (ret) {
+				pr_err("write failed.\n");
+			}
 		}
 		for (int j = 0; j < nr_zone_mt_need_blocks; j++) {
-			dmz_write_block(zmd, zone[i].rmt_blk_n + j, virt_to_page(zone[i].reverse_mt));
+			ret = dmz_write_block(zmd, zone[i].rmt_blk_n + j, virt_to_page(zone[i].reverse_mt));
+			if (ret) {
+				pr_err("write failed.\n");
+			}
 		}
 		for (int j = 0; j < nr_zone_bitmap_need_blocks; j++) {
-			dmz_write_block(zmd, zone[i].bitmap_blk_n + j, virt_to_page(zone[i].bitmap));
+			ret = dmz_write_block(zmd, zone[i].bitmap_blk_n + j, virt_to_page(zone[i].bitmap));
+			if (ret) {
+				pr_err("write failed.\n");
+			}
 		}
 	}
 
@@ -185,7 +204,12 @@ repeat_try:
 		dmz_write_block(zmd, zone_struct_target_zonewp + i, virt_to_page(zmd->zone_start));
 	}
 
-no_enough_space:
+	kfree(wp_after_flush);
+	kfree(mapping_target_zones);
+	kfree(rmapping_target_zones);
+	kfree(bitmap_target_zones);
+
+	return 0;
 fail:
 	kfree(wp_after_flush);
 	kfree(mapping_target_zones);
@@ -194,14 +218,11 @@ fail:
 	return -1;
 
 again:
-	kfree(wp_after_flush);
-	kfree(mapping_target_zones);
-	kfree(rmapping_target_zones);
-	kfree(bitmap_target_zones);
 
 	if (reclaim_zone >= zmd->nr_zones)
 		goto fail;
 
+	pr_info("Repeat try %d.\n", reclaim_zone);
 	dmz_reclaim_zone(dmz, reclaim_zone++);
 	goto repeat_try;
 }

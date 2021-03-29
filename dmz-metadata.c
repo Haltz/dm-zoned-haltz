@@ -11,29 +11,36 @@ enum {
 };
 
 unsigned long *dmz_read_mblk(struct dmz_metadata *zmd, unsigned long pba, int num) {
-	struct page *page = alloc_pages(GFP_KERNEL, get_count_order(num));
-	if (!page) {
+	unsigned long *buffer = __get_free_pages(GFP_KERNEL, get_count_order(num));
+	if (!buffer) {
 		return NULL;
 	}
 
+	pr_info("H1\n");
+
 	struct bio *bio = bio_alloc(GFP_KERNEL, 1);
-	bio_add_page(bio, page, num * DMZ_BLOCK_SIZE, 0);
+	for (int i = 0; i < num; i++) {
+		bio_add_page(bio, virt_to_page(buffer + (i << 9)), DMZ_BLOCK_SIZE, 0);
+	}
 	bio_set_dev(bio, zmd->dev->bdev);
 	bio_set_op_attrs(bio, REQ_OP_READ, 0);
 	bio->bi_iter.bi_sector = pba << 3;
 	submit_bio_wait(bio);
-	if (PageError(page)) {
-		goto io;
+	for (int i = 0; i < num; i++) {
+		if (PageError(virt_to_page(buffer + (i << 9)))) {
+			goto io;
+		}
 	}
 
 	bio_put(bio);
-	return page_address(page);
+	return buffer;
 
 io:
 	bio_put(bio);
 bio:
-	free_page(page_address(page));
+	free_pages(buffer, get_count_order(num));
 page:
+	pr_info("H2\n");
 	return NULL;
 }
 
@@ -131,7 +138,7 @@ unsigned long *dmz_load_bitmap(struct dmz_metadata *zmd) {
 		return NULL;
 	}
 
-	for (int i = 0; i < zmd->useable_start; i++) {
+	for (int i = 1; i < zmd->useable_start; i++) {
 		int v = bitmap_get_value8(bitmap, i);
 		bitmap_set_value8(bitmap, i, v | 0x80);
 	}
@@ -158,8 +165,18 @@ int dmz_reload_metadata(struct dmz_metadata *zmd) {
 
 	pr_info("Reload Read.\n");
 	unsigned long *zones_info = dmz_read_mblk(zmd, super->zones_info, zmd->nr_zone_struct_need_blocks);
+	if (!zones_info) {
+		pr_err("zones_info read failed.\n");
+		goto err;
+	}
 	memcpy(zmd->zone_start, zones_info, zmd->nr_zones * sizeof(struct dmz_zone));
 	free_pages(zones_info, get_count_order(zmd->nr_zone_struct_need_blocks));
+
+	pr_info("Ac1\n");
+
+	for (int i = 0; i < zmd->nr_zones; i++) {
+		pr_info("m: %x, rm: %x, bm: %x\n", zone[i].mt_blk_n, zone[i].rmt_blk_n, zone[i].bitmap_blk_n);
+	}
 
 	for (int i = 0; i < zmd->nr_zones; i++) {
 		// reload mappings

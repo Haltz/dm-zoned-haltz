@@ -66,33 +66,38 @@ struct dmz_zone *dmz_load_zones(struct dmz_metadata *zmd, unsigned long *bitmap)
 		return NULL;
 	}
 
-	if (!(~zmd->sblk->magic)) {
-		for (int i = 0; i < zmd->nr_zones; i++) {
-			struct dmz_zone *cur_zone = zone_start + i;
-			cur_zone->weight = 0;
-			cur_zone->wp = 0;
-			cur_zone->bitmap = bitmap + (zmd->zone_nr_blocks >> 6) * i;
-			cur_zone->mt = kcalloc(zmd->zone_nr_blocks, sizeof(struct dmz_map), GFP_KERNEL);
-			cur_zone->reverse_mt = kcalloc(zmd->zone_nr_blocks, sizeof(struct dmz_map), GFP_KERNEL);
-			for (int j = 0; j < zmd->zone_nr_blocks; j++) {
-				cur_zone->mt[j].block_id = ~0;
-				cur_zone->reverse_mt[j].block_id = ~0;
-			}
+	for (int i = 0; i < zmd->nr_zones; i++) {
+		struct dmz_zone *cur_zone = zone_start + i;
+		cur_zone->weight = 0;
+		cur_zone->wp = 0;
+		cur_zone->bitmap = bitmap + (zmd->zone_nr_blocks >> 6) * i;
+		cur_zone->mt = kcalloc(zmd->zone_nr_blocks, sizeof(struct dmz_map), GFP_KERNEL);
+		if (!cur_zone->mt) {
+			pr_err("mt err.\n");
 		}
-
-		for (int i = 0; i < zmd->useable_start; i++) {
-			unsigned long index = i / zmd->zone_nr_blocks;
-			unsigned long offset = i % zmd->zone_nr_blocks;
-			zone_start[index].mt[offset].block_id = i;
-			zone_start[index].reverse_mt[offset].block_id = i;
+		cur_zone->reverse_mt = kcalloc(zmd->zone_nr_blocks, sizeof(struct dmz_map), GFP_KERNEL);
+		if (!cur_zone->reverse_mt) {
+			pr_err("reverse_mt err.\n");
 		}
-
-		int ret = blkdev_report_zones(zmd->dev->bdev, 0, BLK_ALL_ZONES, dmz_init_zones_type, zmd->zone_start);
-		if (ret) {
-			// FIXME
-			pr_err("Errno is 80, but callback is excuted correctly, how to fix it?\n");
+		for (int j = 0; j < zmd->zone_nr_blocks; j++) {
+			cur_zone->mt[j].block_id = ~0;
+			cur_zone->reverse_mt[j].block_id = ~0;
 		}
 	}
+
+	for (int i = 0; i < zmd->useable_start; i++) {
+		unsigned long index = i / zmd->zone_nr_blocks;
+		unsigned long offset = i % zmd->zone_nr_blocks;
+		zone_start[index].mt[offset].block_id = i;
+		zone_start[index].reverse_mt[offset].block_id = i;
+	}
+
+	int ret = blkdev_report_zones(zmd->dev->bdev, 0, BLK_ALL_ZONES, dmz_init_zones_type, zone_start);
+	if (ret) {
+		// FIXME
+		pr_err("Errno is 80, but callback is excuted correctly, how to fix it?\n");
+	}
+
 	return zone_start;
 }
 
@@ -126,11 +131,9 @@ unsigned long *dmz_load_bitmap(struct dmz_metadata *zmd) {
 		return NULL;
 	}
 
-	if (!(~zmd->sblk->magic)) {
-		for (int i = 0; i < zmd->useable_start; i++) {
-			int v = bitmap_get_value8(bitmap, i);
-			bitmap_set_value8(bitmap, i, v | 0x80);
-		}
+	for (int i = 0; i < zmd->useable_start; i++) {
+		int v = bitmap_get_value8(bitmap, i);
+		bitmap_set_value8(bitmap, i, v | 0x80);
 	}
 
 	return bitmap;
@@ -153,6 +156,7 @@ int dmz_reload_metadata(struct dmz_metadata *zmd) {
 	struct dmz_zone *zone = zmd->zone_start;
 	struct dmz_super *super = zmd->sblk;
 
+	pr_info("Reload Read.\n");
 	unsigned long *zones_info = dmz_read_mblk(zmd, super->zones_info, zmd->nr_zone_struct_need_blocks);
 	memcpy(zmd->zone_start, zones_info, zmd->nr_zones * sizeof(struct dmz_zone));
 	free_pages(zones_info, get_count_order(zmd->nr_zone_struct_need_blocks));
@@ -193,6 +197,7 @@ int dmz_load_metadata(struct dmz_metadata *zmd) {
 
 	unsigned long *sblk = dmz_read_mblk(zmd, 0, 1);
 	zmd->sblk = (struct dmz_super *)dmz_read_mblk(zmd, 0, 1);
+	pr_info("Read Info: %d %d\n", zmd->sblk->magic, zmd->sblk->zones_info);
 
 	zmd->nr_blocks = zmd->capacity >> 3; // the unit of capacity is sectors
 
@@ -226,6 +231,7 @@ int dmz_load_metadata(struct dmz_metadata *zmd) {
 	pr_info("Zones succeed.\n");
 
 	if (!(~zmd->sblk->magic)) {
+		pr_info("Start Initlization.\n");
 		ret = dmz_reload_metadata(zmd);
 		if (ret) {
 			pr_err("Reload Failed.\n");

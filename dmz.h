@@ -79,17 +79,23 @@ enum DMZ_STATUS { DMZ_BLOCK_FREE, DMZ_BLOCK_INVALID, DMZ_BLOCK_VALID };
 enum DMZ_ZONE_TYPE { DMZ_ZONE_NONE, DMZ_ZONE_SEQ, DMZ_ZONE_RND };
 
 struct dmz_super {
-	u64 magic; // 8
+	__u64 magic; // 8
 
-	u64 zones_info; // 8;
+	__u64 zones_info; // 8;
 
-	u8 reserved[496];
+	__u8 dmz_uuid[16];
+
+	__u8 dev_uuid[16];
+
+	__u8 dmz_label[32];
+
+	__u8 reserved[432];
 };
 
 struct dmz_metadata {
 	struct dmz_dev *dev;
 
-	u64 capacity;
+	unsigned long capacity;
 	char name[BDEVNAME_SIZE];
 
 	unsigned long mapping_size;
@@ -122,7 +128,7 @@ struct dmz_metadata {
 };
 
 struct dmz_map {
-	__le64 block_id;
+	unsigned long block_id;
 };
 
 struct dmz_dev {
@@ -130,10 +136,10 @@ struct dmz_dev {
 
 	char name[BDEVNAME_SIZE];
 
-	sector_t capacity;
+	unsigned long capacity;
 
 	unsigned int nr_zones;
-	sector_t nr_zone_sectors;
+	unsigned long nr_zone_sectors;
 };
 
 /*
@@ -180,7 +186,7 @@ void dmz_dtr_metadata(struct dmz_metadata *);
 int dmz_ctr_reclaim(void);
 int dmz_reclaim_zone(struct dmz_target *dmz, int zone);
 
-u64 dmz_get_map(struct dmz_metadata *zmd, u64 lba);
+unsigned long dmz_get_map(struct dmz_metadata *zmd, unsigned long lba);
 void dmz_update_map(struct dmz_target *dmz, unsigned long lba, unsigned long pba);
 
 int dmz_pba_alloc(struct dmz_target *dmz);

@@ -362,7 +362,7 @@ static int dmz_submit_bio(struct dmz_target *dmz, struct bio *bio) {
 				// pr_info("R: lba: %llx, pba: %lx\n", lba + i, clone_bioctx->old_pba);
 			}
 		}
-s
+
 		// mem split
 		// sequential w
 		cloned_bio->bi_iter.bi_sector = dmz_start_sector(dmz) + dmz_blk2sect(pba);

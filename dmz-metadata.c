@@ -24,10 +24,13 @@ unsigned long *dmz_read_mblk(struct dmz_metadata *zmd, unsigned long pba, int nu
 	bio_set_op_attrs(bio, REQ_OP_READ, 0);
 	bio->bi_iter.bi_sector = pba << 3;
 	submit_bio_wait(bio);
-	for (int i = 0; i < num; i++) {
-		if (PageError(virt_to_page(buffer + (i << 9)))) {
-			goto io;
-		}
+	// for (int i = 0; i < num; i++) {
+	// 	if (PageError(virt_to_page(buffer + (i << 9)))) {
+	// 		goto io;
+	// 	}
+	// }
+	if (bio->bi_status != BLK_STS_OK) {
+		goto io;
 	}
 
 	bio_put(bio);
@@ -89,13 +92,6 @@ struct dmz_zone *dmz_load_zones(struct dmz_metadata *zmd, unsigned long *bitmap)
 		}
 	}
 
-	for (int i = 0; i < zmd->useable_start; i++) {
-		unsigned long index = i / zmd->zone_nr_blocks;
-		unsigned long offset = i % zmd->zone_nr_blocks;
-		zone_start[index].mt[offset].block_id = i;
-		zone_start[index].reverse_mt[offset].block_id = i;
-	}
-
 	int ret = blkdev_report_zones(zmd->dev->bdev, 0, BLK_ALL_ZONES, dmz_init_zones_type, zone_start);
 	if (ret) {
 		// FIXME
@@ -121,8 +117,9 @@ void dmz_unload_zones(struct dmz_metadata *zmd) {
 		if (cur->reverse_mt) {
 			kfree(cur->reverse_mt);
 		}
-		kfree(cur);
 	}
+
+	kfree(zone);
 }
 
 /* Load bitmap and zones */
@@ -167,7 +164,7 @@ int dmz_reload_metadata(struct dmz_metadata *zmd) {
 		goto err;
 	}
 	memcpy(zmd->zone_start, zones_info, zmd->nr_zones * sizeof(struct dmz_zone));
-	free_pages(zones_info, get_count_order(zmd->nr_zone_struct_need_blocks));
+	kfree(zones_info);
 
 	pr_info("Ac1\n");
 
@@ -338,11 +335,11 @@ void dmz_dtr_metadata(struct dmz_metadata *zmd) {
 		return;
 
 	if (zmd->sblk) {
-		free_page(zmd->sblk);
+		kfree(zmd->sblk);
 	}
 
-	// dmz_unload_bitmap(zmd);
-	// dmz_unload_zones(zmd);
+	dmz_unload_bitmap(zmd);
+	dmz_unload_zones(zmd);
 
 	if (zmd)
 		kfree(zmd);

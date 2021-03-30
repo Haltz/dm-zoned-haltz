@@ -393,13 +393,6 @@ static int dmz_handle_read(struct dmz_target *dmz, struct bio *bio) {
 }
 
 static int dmz_handle_write(struct dmz_target *dmz, struct bio *bio) {
-	// pr_info("Write as Follows.\n");
-
-	if (BIO_IS_FLUSH(bio)) {
-		dmz_flush(dmz);
-	}
-
-	// flush bio
 	if (!bio->bi_iter.bi_size) {
 		// pr_err("flush is not supported tempoarily.\n");
 		zero_fill_bio(bio);
@@ -432,6 +425,10 @@ static int dmz_handle_discard(struct dmz_target *dmz, struct bio *bio) {
 			// pr_info("[dmz-err]: try to [discard/write zeros] to unmapped block.(Tempoarily I allow it.\n)");
 		} else {
 			bitmap_set_value8(zmd->bitmap_start, 0x7f & bitmap_get_value8(zmd->bitmap_start, pba), pba);
+			// int index = pba / zmd->zone_nr_blocks, offset = pba % zmd->zone_nr_blocks;
+			// zone[index].reverse_mt[offset].block_id = ~0;
+			// index = lba / zmd->zone_nr_blocks, offset = lba % zmd->zone_nr_blocks;
+			// zone[index].mt[offset].block_id = ~0;
 		}
 	}
 

@@ -1,10 +1,6 @@
 #include "dmz.h"
 #include <linux/mm.h>
 
-unsigned long dmz_dev_capacity(struct dmz_target *dmz) {
-	blkdev_ioctl(dmz->dev->bdev, 0, BLKGETSIZE, 0);
-}
-
 // TODO inc_wp should trigger recliam process under proper circumustance.
 int dmz_inc_wp(struct dmz_metadata *zmd, struct dmz_zone *zone) {
 	return 0;
@@ -121,10 +117,10 @@ int dmz_flush_do(struct dmz_target *dmz) {
 	unsigned long *wp_after_flush, *mapping_target_zones, *rmapping_target_zones, *bitmap_target_zones;
 
 repeat_try:
-	wp_after_flush = kcalloc(zmd->nr_zones, sizeof(unsigned long), GFP_KERNEL);
-	mapping_target_zones = kcalloc(zmd->nr_zones, sizeof(unsigned long), GFP_KERNEL);
-	rmapping_target_zones = kcalloc(zmd->nr_zones, sizeof(unsigned long), GFP_KERNEL);
-	bitmap_target_zones = kcalloc(zmd->nr_zones, sizeof(unsigned long), GFP_KERNEL);
+	wp_after_flush = kzalloc(zmd->nr_zones * sizeof(unsigned long), GFP_KERNEL);
+	mapping_target_zones = kzalloc(zmd->nr_zones * sizeof(unsigned long), GFP_KERNEL);
+	rmapping_target_zones = kzalloc(zmd->nr_zones * sizeof(unsigned long), GFP_KERNEL);
+	bitmap_target_zones = kzalloc(zmd->nr_zones * sizeof(unsigned long), GFP_KERNEL);
 
 	if (!wp_after_flush || !mapping_target_zones || !rmapping_target_zones || !bitmap_target_zones) {
 		pr_info("alloc wp arrays failed.\n");
@@ -202,7 +198,7 @@ repeat_try:
 	}
 
 	for (int i = 0; i < nr_zone_struct_need_blocks; i++) {
-		unsigned long lint = zmd->zone_start;
+		unsigned long lint = (unsigned long)zmd->zone_start;
 		dmz_write_block(zmd, zone_struct_target_zonewp + i, virt_to_page(lint + (i << DMZ_BLOCK_SHIFT)));
 	}
 

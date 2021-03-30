@@ -61,12 +61,12 @@ void dmz_reclaim_read_bio_endio(struct bio *bio) {
 
 unsigned long dmz_reclaim_read_block(struct dmz_target *dmz, unsigned long pba) {
 	struct dmz_metadata *zmd = dmz->zmd;
-	struct page *page = alloc_page(GFP_ATOMIC);
+	struct page *page = alloc_page(GFP_KERNEL);
 	if (!page)
 		goto buffer_alloc;
 	unsigned long buffer = page_address(page);
 
-	struct bio *rbio = bio_alloc(GFP_ATOMIC, 1);
+	struct bio *rbio = bio_alloc(GFP_KERNEL, 1);
 	if (!rbio)
 		goto bio_alloc;
 	bio_set_dev(rbio, zmd->dev->bdev);
@@ -110,7 +110,7 @@ int dmz_reclaim_write_block(struct dmz_target *dmz, unsigned long pba, unsigned 
 		goto invalid_kaddr;
 	}
 
-	struct bio *wbio = bio_alloc(GFP_ATOMIC, 1);
+	struct bio *wbio = bio_alloc(GFP_KERNEL, 1);
 	if (!wbio)
 		goto bio_alloc;
 	bio_set_dev(wbio, zmd->dev->bdev);

@@ -124,8 +124,6 @@ static int dmz_ctr(struct dm_target *ti, unsigned int argc, char **argv) {
 	spin_lock_init(&zmd->bitmap_lock);
 	spin_lock_init(&dmz->single_thread_lock);
 
-	// dmz_ctr_reclaim();
-
 	/* Set target (no write same support) */
 	ti->max_io_len = dmz->zmd->zone_nr_sectors;
 	ti->num_flush_bios = 1;
@@ -296,7 +294,7 @@ static int dmz_submit_bio(struct dmz_target *dmz, struct bio *bio) {
 	bioctx->dev = zmd->dev;
 
 	for (int i = 0; i < nr_blocks; i++) {
-		struct bio *cloned_bio = bio_clone_fast(bio, GFP_ATOMIC, &dmz->bio_set);
+		struct bio *cloned_bio = bio_clone_fast(bio, GFP_KERNEL, &dmz->bio_set);
 		if (!cloned_bio) {
 			return -ENOMEM;
 		}
@@ -305,7 +303,7 @@ static int dmz_submit_bio(struct dmz_target *dmz, struct bio *bio) {
 
 		sector_t pba = dmz_l2p(dmz, lba + i);
 
-		struct dmz_clone_bioctx *clone_bioctx = kzalloc(sizeof(struct dmz_clone_bioctx), GFP_ATOMIC);
+		struct dmz_clone_bioctx *clone_bioctx = kzalloc(sizeof(struct dmz_clone_bioctx), GFP_KERNEL);
 		clone_bioctx->bioctx = bioctx;
 		clone_bioctx->dmz = dmz;
 		clone_bioctx->lba = lba + i;

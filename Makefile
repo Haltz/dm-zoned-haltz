@@ -4,7 +4,7 @@
 #
 
 modname ?= dm-zoned
-sourcelist ?= dmz-target.o dmz-metadata.o dmz-reclaim.o dmz-utils.o
+sourcelist ?= dmz-target.o dmz-metadata.o dmz-reclaim.o dmz-utils.o dmz-create.o
 
 ccflags-y := -std=gnu99 -Wall
 

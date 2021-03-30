@@ -69,7 +69,7 @@ unsigned long dmz_reclaim_read_block(struct dmz_target *dmz, unsigned long pba) 
 	struct bio *rbio = bio_alloc(GFP_KERNEL, 1);
 	if (!rbio)
 		goto bio_alloc;
-	bio_set_dev(rbio, zmd->dev->bdev);
+	bio_set_dev(rbio, zmd->target_bdev);
 	rbio->bi_iter.bi_sector = pba << 3;
 	rbio->bi_private = page;
 	// Here PAGE_SIZE = DMZ_BLOCK_SIZE = 4KB
@@ -113,7 +113,7 @@ int dmz_reclaim_write_block(struct dmz_target *dmz, unsigned long pba, unsigned 
 	struct bio *wbio = bio_alloc(GFP_KERNEL, 1);
 	if (!wbio)
 		goto bio_alloc;
-	bio_set_dev(wbio, zmd->dev->bdev);
+	bio_set_dev(wbio, zmd->target_bdev);
 	wbio->bi_iter.bi_sector = pba << 3;
 	wbio->bi_private = page;
 	// Here PAGE_SIZE = DMZ_BLOCK_SIZE = 4KB
@@ -260,7 +260,7 @@ int dmz_reclaim_zone(struct dmz_target *dmz, int zone) {
 	cur_zone->wp = 0;
 
 	if (DMZ_IS_SEQ(cur_zone)) {
-		ret = blkdev_zone_mgmt(zmd->dev->bdev, REQ_OP_ZONE_RESET, zmd->zone_nr_sectors * zone, zmd->zone_nr_sectors, GFP_NOIO);
+		ret = blkdev_zone_mgmt(zmd->target_bdev, REQ_OP_ZONE_RESET, zmd->zone_nr_sectors * zone, zmd->zone_nr_sectors, GFP_NOIO);
 	} else {
 	}
 

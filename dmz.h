@@ -26,6 +26,7 @@
 #include <linux/module.h>
 #include <linux/bio.h>
 #include <linux/log2.h>
+#include <linux/blk-mq.h>
 
 #define KB (1 << 10)
 #define MB (1 << 20)
@@ -95,6 +96,7 @@ struct dmz_super {
 
 struct dmz_metadata {
 	struct dmz_dev *dev;
+	struct block_device *target_bdev;
 
 	unsigned long capacity;
 	char name[BDEVNAME_SIZE];
@@ -137,26 +139,35 @@ struct dmz_dev {
 	struct block_device *bdev;
 
 	char name[BDEVNAME_SIZE];
+	char major_minor_id[16];
 
 	unsigned long capacity;
 
 	unsigned int nr_zones;
 	unsigned long nr_zone_sectors;
+
+	struct request_queue *queue;
+	struct gendisk *disk;
+
+	struct blk_mq_tag_set set;
 };
 
 /*
  * Target descriptor.
  */
 struct dmz_target {
-	struct dm_dev *ddev;
 	struct dmz_dev *dev;
 
 	struct dmz_metadata *zmd;
 
 	unsigned int flags;
 
+	struct block_device *target_bdev;
+
 	// if we want to clone bios, bio_set is neccessary.
 	struct bio_set bio_set;
+
+	refcount_t ref;
 
 	// This lock is to simplify development of demo by making program single-thread.
 	// Disable it when pipeline is good.
@@ -198,5 +209,6 @@ int dmz_pba_alloc(struct dmz_target *dmz);
 unsigned long dmz_reclaim_pba_alloc(struct dmz_target *dmz, int reclaim_zone);
 
 int dmz_flush(struct dmz_target *dmz);
+int dmz_map(struct dmz_target *dmz, struct bio *bio);
 
 #endif

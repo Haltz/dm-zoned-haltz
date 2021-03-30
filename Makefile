@@ -3,7 +3,7 @@
 # and optimized by myself
 #
 
-modname ?= dm-zoned
+modname ?= dmzoned
 sourcelist ?= dmz-target.o dmz-metadata.o dmz-reclaim.o dmz-utils.o dmz-create.o
 
 ccflags-y := -std=gnu99 -Wall

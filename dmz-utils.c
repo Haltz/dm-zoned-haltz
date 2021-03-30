@@ -17,7 +17,7 @@ int dmz_write_block(struct dmz_metadata *zmd, unsigned long pba, struct page *pa
 		goto alloc_bio;
 
 	bio_add_page(bio, page, DMZ_BLOCK_SIZE, 0);
-	bio_set_dev(bio, zmd->dev->bdev);
+	bio_set_dev(bio, zmd->target_bdev);
 	bio_set_op_attrs(bio, REQ_OP_WRITE, 0);
 	bio->bi_iter.bi_sector = pba << 3;
 	submit_bio_wait(bio);
@@ -46,7 +46,7 @@ struct page *dmz_read_block(struct dmz_metadata *zmd, unsigned long pba) {
 		goto alloc_bio;
 
 	bio_add_page(bio, page, DMZ_BLOCK_SIZE, 0);
-	bio_set_dev(bio, zmd->dev->bdev);
+	bio_set_dev(bio, zmd->target_bdev);
 	bio_set_op_attrs(bio, REQ_OP_READ, 0);
 	bio->bi_iter.bi_sector = pba << 3;
 	submit_bio_wait(bio);

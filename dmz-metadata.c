@@ -20,7 +20,7 @@ unsigned long *dmz_read_mblk(struct dmz_metadata *zmd, unsigned long pba, int nu
 	for (int i = 0; i < num; i++) {
 		bio_add_page(bio, virt_to_page(buffer + (i << 9)), DMZ_BLOCK_SIZE, 0);
 	}
-	bio_set_dev(bio, zmd->dev->bdev);
+	bio_set_dev(bio, zmd->target_bdev);
 	bio_set_op_attrs(bio, REQ_OP_READ, 0);
 	bio->bi_iter.bi_sector = pba << 3;
 	submit_bio_wait(bio);
@@ -92,7 +92,7 @@ struct dmz_zone *dmz_load_zones(struct dmz_metadata *zmd, unsigned long *bitmap)
 		}
 	}
 
-	int ret = blkdev_report_zones(zmd->dev->bdev, 0, BLK_ALL_ZONES, dmz_init_zones_type, zone_start);
+	int ret = blkdev_report_zones(zmd->target_bdev, 0, BLK_ALL_ZONES, dmz_init_zones_type, zone_start);
 	if (ret) {
 		// FIXME
 		pr_err("Errno is 80, but callback is excuted correctly, how to fix it?\n");
@@ -223,7 +223,7 @@ int dmz_load_metadata(struct dmz_metadata *zmd) {
 	int ret = 0;
 
 	unsigned long *sblk = dmz_read_mblk(zmd, 0, 1);
-	zmd->sblk = (struct dmz_super *)dmz_read_mblk(zmd, 0, 1);
+	zmd->sblk = (struct dmz_super *)sblk;
 	pr_info("Read Info: %d %d\n", zmd->sblk->magic, zmd->sblk->zones_info);
 
 	zmd->nr_blocks = zmd->capacity >> 3; // the unit of capacity is sectors
@@ -298,6 +298,7 @@ int dmz_ctr_metadata(struct dmz_target *dmz) {
 
 	zmd->capacity = dev->capacity;
 	zmd->dev = dev;
+	zmd->target_bdev = dmz->target_bdev;
 	strcpy(zmd->name, dev->name);
 
 	zmd->zone_nr_sectors = dev->nr_zone_sectors;

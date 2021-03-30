@@ -243,12 +243,14 @@ int dmz_reclaim_zone(struct dmz_target *dmz, int zone) {
 		unsigned int size = sizeof(unsigned long) << 3;
 		int shift = ((offset % size) + 8 > size) ? size - 1 - (offset % size) : 7;
 		if (valid_bitmap & (0x1 << shift)) {
-			unsigned long pba = dmz_p2l(zmd, zone * zmd->zone_nr_blocks + offset);
-			if (dmz_is_default_pba(pba)) {
-				pr_err("pba is error(default value means no such pba).\n");
-				goto pba_err;
+			unsigned long lba = dmz_p2l(zmd, zone * zmd->zone_nr_blocks + offset);
+			if (dmz_is_default_pba(lba)) {
+				// Here means that it is blk stores mt or rmt or bitmap. I have not update bitmap for them.
+				// Just ignore them because we have to flush them again before unload device.
+				// TODO update bitmap when flushing these metadata blocks.(They don't need to be valid.)
+				continue;
 			}
-			int ret = dmz_make_reclaim_bio(dmz, pba);
+			int ret = dmz_make_reclaim_bio(dmz, lba);
 			if (ret) {
 				goto reclaim_bio_err;
 			}

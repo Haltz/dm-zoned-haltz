@@ -24,13 +24,11 @@ int dmz_write_block(struct dmz_metadata *zmd, unsigned long pba, struct page *pa
 	bio_set_dev(bio, zmd->dev->bdev);
 	bio_set_op_attrs(bio, REQ_OP_WRITE, 0);
 	bio->bi_iter.bi_sector = pba << 3;
-	set_page_writeback(page);
 	submit_bio_wait(bio);
-	end_page_writeback(page);
-	wait_on_page_writeback(page);
+
 	bio_put(bio);
 
-	if (PageError(page)) {
+	if (bio->bi_status != BLK_STS_OK) {
 		goto write_err;
 	}
 
@@ -181,19 +179,22 @@ repeat_try:
 
 	for (int i = 0; i < zmd->nr_zones; i++) {
 		for (int j = 0; j < nr_zone_mt_need_blocks; j++) {
-			ret = dmz_write_block(zmd, zone[i].mt_blk_n + j, virt_to_page(zone[i].mt));
+			unsigned long lint = (unsigned long)zone[i].mt;
+			ret = dmz_write_block(zmd, zone[i].mt_blk_n + j, virt_to_page(lint + (j << DMZ_BLOCK_SHIFT)));
 			if (ret) {
 				pr_err("write failed.\n");
 			}
 		}
 		for (int j = 0; j < nr_zone_mt_need_blocks; j++) {
-			ret = dmz_write_block(zmd, zone[i].rmt_blk_n + j, virt_to_page(zone[i].reverse_mt));
+			unsigned long lint = (unsigned long)zone[i].reverse_mt;
+			ret = dmz_write_block(zmd, zone[i].rmt_blk_n + j, virt_to_page(lint + (j << DMZ_BLOCK_SHIFT)));
 			if (ret) {
 				pr_err("write failed.\n");
 			}
 		}
 		for (int j = 0; j < nr_zone_bitmap_need_blocks; j++) {
-			ret = dmz_write_block(zmd, zone[i].bitmap_blk_n + j, virt_to_page(zone[i].bitmap));
+			unsigned long bitmap_longint = (unsigned long)zone[i].bitmap;
+			ret = dmz_write_block(zmd, zone[i].bitmap_blk_n + j, virt_to_page(bitmap_longint + (j << DMZ_BLOCK_SHIFT)));
 			if (ret) {
 				pr_err("write failed.\n");
 			}
@@ -201,7 +202,8 @@ repeat_try:
 	}
 
 	for (int i = 0; i < nr_zone_struct_need_blocks; i++) {
-		dmz_write_block(zmd, zone_struct_target_zonewp + i, virt_to_page(zmd->zone_start));
+		unsigned long lint = zmd->zone_start;
+		dmz_write_block(zmd, zone_struct_target_zonewp + i, virt_to_page(lint + (i << DMZ_BLOCK_SHIFT)));
 	}
 
 	kfree(wp_after_flush);

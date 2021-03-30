@@ -35,6 +35,7 @@
 #define DEV_CAPACITY 2 << 30;
 #define ZONE_SIZE (256 * MB)
 #define DEVICE_NAME_SIZE 512
+#define MAX_NR_BLOCKS_ONCE_READ 64
 
 /*
  * dm-zoned creates block devices with 4KB blocks, always.
@@ -127,6 +128,7 @@ struct dmz_metadata {
 	spinlock_t bitmap_lock;
 };
 
+/** Note: sizeof(struct dmz_map) must be power of 2 to make sure block_size is aligned to sizeof(struct dmz_map) **/
 struct dmz_map {
 	unsigned long block_id;
 };
@@ -179,6 +181,9 @@ struct dmz_zone {
 	unsigned long rmt_blk_n; // 8
 	// bitmap block pbn
 	unsigned long bitmap_blk_n; // 8
+
+	// make sure size is power of 2
+	u8 reserved[4];
 };
 
 int dmz_ctr_metadata(struct dmz_target *);

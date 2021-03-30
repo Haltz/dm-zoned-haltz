@@ -143,6 +143,8 @@ static int dmz_ctr(struct dm_target *ti, unsigned int argc, char **argv) {
 static void dmz_dtr(struct dm_target *ti) {
 	struct dmz_target *dmz = ti->private;
 
+	dmz_flush(dmz);
+
 	dmz_put_zoned_device(ti);
 
 	if (!dmz) {
@@ -269,7 +271,6 @@ static void dmz_clone_endio(struct bio *clone) {
 	// if write op succeeds, update mapping. (validate wp and invalidate old_pba if old_pba exists.)
 	if (status == BLK_STS_OK && bio_op(bioctx->bio) == REQ_OP_WRITE) {
 		dmz_update_map(dmz, clone_bioctx->lba, clone_bioctx->new_pba);
-	} else {
 	}
 
 	int index = clone_bioctx->new_pba / zmd->zone_nr_blocks, offset = clone_bioctx->new_pba % zmd->zone_nr_blocks;
@@ -380,7 +381,7 @@ static int dmz_submit_bio(struct dmz_target *dmz, struct bio *bio) {
 		submit_bio_noacct(cloned_bio);
 	}
 
-	return 0;
+	return DM_MAPIO_SUBMITTED;
 }
 
 static int dmz_handle_read(struct dmz_target *dmz, struct bio *bio) {
@@ -416,6 +417,7 @@ static int dmz_handle_write(struct dmz_target *dmz, struct bio *bio) {
 static int dmz_handle_discard(struct dmz_target *dmz, struct bio *bio) {
 	// pr_info("Discard or write zeros\n");
 	struct dmz_metadata *zmd = dmz->zmd;
+	struct dmz_zone *zone = zmd->zone_start;
 
 	int ret = 0;
 
@@ -429,7 +431,7 @@ static int dmz_handle_discard(struct dmz_target *dmz, struct bio *bio) {
 			// discarding unmapped is invalid
 			// pr_info("[dmz-err]: try to [discard/write zeros] to unmapped block.(Tempoarily I allow it.\n)");
 		} else {
-			bitmap_clear(zmd->bitmap_start, pba, 1);
+			bitmap_set_value8(zmd->bitmap_start, 0x7f & bitmap_get_value8(zmd->bitmap_start, pba), pba);
 		}
 	}
 
@@ -441,8 +443,8 @@ static int dmz_handle_discard(struct dmz_target *dmz, struct bio *bio) {
 
 /* Map bio */
 static int dmz_map(struct dm_target *ti, struct bio *bio) {
-	// pr_info("Map\n: bi_sector: %llx\t bi_size: %x\n", bio->bi_iter.bi_sector, bio->bi_iter.bi_size);
-	// pr_info("start_sector: %lld, nr_sectors: %d\n", bio->bi_iter.bi_sector, bio_sectors(bio));
+	pr_info("Map: bi_sector: %llx\t bi_size: %x\n", bio->bi_iter.bi_sector, bio->bi_iter.bi_size);
+	pr_info("start_sector: %lld, nr_sectors: %d op: %d\n", bio->bi_iter.bi_sector, bio_sectors(bio), bio_op(bio));
 
 	struct dmz_bioctx *bioctx = dm_per_bio_data(bio, sizeof(struct dmz_bioctx));
 	struct dmz_target *dmz = ti->private;
@@ -502,13 +504,6 @@ static void dmz_status(struct dm_target *ti, status_type_t type, unsigned int st
 	struct dmz_target *dmz = ti->private;
 	struct dmz_metadata *zmd = dmz->zmd;
 	int ret = 0;
-
-	ret = dmz_flush(dmz);
-
-	if (ret) {
-		pr_err("reclaim return non-null.\n");
-		return;
-	}
 }
 
 /*

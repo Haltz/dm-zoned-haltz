@@ -253,14 +253,15 @@ int dmz_flush(struct dmz_target *dmz) {
 	}
 
 	// predicate mappings, bitmap, zones, metadata after flush and then do the flush.
-	ret = dmz_flush_do(dmz);
-	if (ret) {
-		pr_err("flush failed.\n");
-	}
+	// ret = dmz_flush_do(dmz);
+	// if (ret) {
+	// 	pr_err("flush failed.\n");
+	// }
 
 	if (!locked) {
 		spin_unlock_irqrestore(&dmz->single_thread_lock, flags);
 	}
+
 	return 0;
 
 ptr_null:

@@ -7,7 +7,7 @@ static unsigned int major = 255;
 
 struct dmz_target *dmz_tgt;
 
-static blk_qc_t dmz_submit_bio(struct bio *bio) {
+static blk_qc_t dmz_bops_submit_bio(struct bio *bio) {
 	return dmz_map(dmz_tgt, bio);
 }
 
@@ -21,7 +21,7 @@ static void dmz_close(struct gendisk *disk, fmode_t mode) {
 	return;
 }
 
-static const struct block_device_operations dmz_blk_dops = { .submit_bio = dmz_submit_bio, .open = dmz_open, .release = dmz_close, .owner = THIS_MODULE };
+static const struct block_device_operations dmz_blk_dops = { .submit_bio = dmz_bops_submit_bio, .open = dmz_open, .release = dmz_close, .owner = THIS_MODULE };
 
 static int queue_rw_rq(struct dmz_target *dmz, struct request *req) {
 	struct bio *next = req->bio;
@@ -194,6 +194,8 @@ int dmz_ctr(struct dmz_target *dmz) {
 		return -ENOMEM;
 	}
 
+	refcount_set(&dmz->ref, 1);
+
 	dmz->dev = dev_create(dmz);
 	if (!dmz->dev) {
 		return -ENOMEM;
@@ -227,7 +229,7 @@ void dmz_dtr(struct dmz_target *dmz) {
 		return;
 	}
 
-	dmz_flush(dmz);
+	// dmz_flush(dmz);
 
 	dmz_dtr_metadata(dmz->zmd);
 

@@ -6,7 +6,6 @@ enum { DMZ_BLK_FREE, DMZ_BLK_VALID, DMZ_BLK_INVALID };
 enum { DMZ_UNMAPPED, DMZ_MAPPED };
 
 struct dmz_bioctx {
-	struct dmz_dev *dev;
 	struct bio *bio;
 	refcount_t ref;
 };
@@ -73,6 +72,8 @@ void dmz_bio_endio(struct bio *bio, blk_status_t status) {
 	if (status != BLK_STS_OK && bio->bi_status == BLK_STS_OK)
 		bio->bi_status = status;
 
+	pr_info("Endio Status: %d\n", status);
+
 	bio_endio(bio);
 }
 
@@ -121,6 +122,8 @@ void dmz_clone_endio(struct bio *clone) {
 	struct dmz_bioctx *bioctx = clone_bioctx->bioctx;
 	unsigned long flags;
 
+	pr_info("Clone Endio\n");
+
 	bio_put(clone);
 	refcount_dec(&bioctx->ref);
 
@@ -136,11 +139,15 @@ void dmz_clone_endio(struct bio *clone) {
 
 	if (refcount_dec_if_one(&bioctx->ref)) {
 		dmz_bio_endio(bioctx->bio, status);
+		kfree(bioctx);
 	}
+
+	kfree(clone_bioctx);
 }
 
-int dmz_submit_bio(struct dmz_target *dmz, struct bio *bio) {
-	struct dmz_bioctx *bioctx = dm_per_bio_data(bio, sizeof(struct dmz_bioctx));
+int dmz_submit_bio(struct dmz_target *dmz, struct bio *bio, struct dmz_bioctx *bioctx) {
+	// struct dmz_bioctx *bioctx = dm_per_bio_data(bio, sizeof(struct dmz_bioctx));
+	bioctx->bio = bio;
 	struct dmz_metadata *zmd = dmz->zmd;
 	int op = bio_op(bio);
 
@@ -149,7 +156,12 @@ int dmz_submit_bio(struct dmz_target *dmz, struct bio *bio) {
 	sector_t nr_sectors = bio_sectors(bio), logic_sector = bio->bi_iter.bi_sector;
 	sector_t nr_blocks = dmz_sect2blk(nr_sectors), lba = dmz_sect2blk(logic_sector);
 
-	bioctx->dev = zmd->dev;
+	pr_info("nr_sectors: %d, lsector: %d\n", nr_sectors, logic_sector);
+	if ((nr_sectors & 0x7 || logic_sector & 0x7) && bio_op(bio) == REQ_OP_READ) {
+		bio_set_dev(bio, zmd->target_bdev);
+		submit_bio(bio);
+		return DM_MAPIO_SUBMITTED;
+	}
 
 	for (int i = 0; i < nr_blocks; i++) {
 		struct bio *cloned_bio = bio_clone_fast(bio, GFP_KERNEL, &dmz->bio_set);
@@ -193,7 +205,8 @@ int dmz_submit_bio(struct dmz_target *dmz, struct bio *bio) {
 
 				if (i == nr_blocks - 1) {
 					bio->bi_status = BLK_STS_OK;
-					bio_endio(bio);
+					dmz_bio_endio(bio, BLK_STS_OK);
+					pr_info("Endio In Read Zero.\n");
 				}
 
 				// pr_info("Zero out: lba: %llx, pba: %llx\n", lba + i, pba);
@@ -220,7 +233,7 @@ int dmz_submit_bio(struct dmz_target *dmz, struct bio *bio) {
 
 		// mem split
 		// sequential w
-		cloned_bio->bi_iter.bi_sector = dmz_start_sector(dmz) + dmz_blk2sect(pba);
+		cloned_bio->bi_iter.bi_sector = dmz_blk2sect(pba);
 		cloned_bio->bi_iter.bi_size = DMZ_BLOCK_SIZE;
 		cloned_bio->bi_end_io = dmz_clone_endio;
 
@@ -234,21 +247,23 @@ int dmz_submit_bio(struct dmz_target *dmz, struct bio *bio) {
 
 		cloned_bio->bi_private = clone_bioctx;
 
+		pr_info("Clone Bio Submitted.\n");
+
 		submit_bio_noacct(cloned_bio);
 	}
 
 	return DM_MAPIO_SUBMITTED;
 }
 
-int dmz_handle_read(struct dmz_target *dmz, struct bio *bio) {
+int dmz_handle_read(struct dmz_target *dmz, struct bio *bio, struct dmz_bioctx *bioctx) {
 	// pr_info("Read as follows.\n");
 
-	dmz_submit_bio(dmz, bio);
+	dmz_submit_bio(dmz, bio, bioctx);
 
 	return 0;
 }
 
-int dmz_handle_write(struct dmz_target *dmz, struct bio *bio) {
+int dmz_handle_write(struct dmz_target *dmz, struct bio *bio, struct dmz_bioctx *bioctx) {
 	if (!bio->bi_iter.bi_size) {
 		// pr_err("flush is not supported tempoarily.\n");
 		zero_fill_bio(bio);
@@ -258,7 +273,7 @@ int dmz_handle_write(struct dmz_target *dmz, struct bio *bio) {
 	}
 
 	// submit bio.
-	dmz_submit_bio(dmz, bio);
+	dmz_submit_bio(dmz, bio, bioctx);
 
 	return 0;
 }
@@ -299,24 +314,23 @@ int dmz_map(struct dmz_target *dmz, struct bio *bio) {
 	pr_info("Map: bi_sector: %llx\t bi_size: %x\n", bio->bi_iter.bi_sector, bio->bi_iter.bi_size);
 	pr_info("start_sector: %lld, nr_sectors: %d op: %d\n", bio->bi_iter.bi_sector, bio_sectors(bio), bio_op(bio));
 
-	struct dmz_bioctx *bioctx = dm_per_bio_data(bio, sizeof(struct dmz_bioctx));
+	// struct dmz_bioctx *bioctx = dm_per_bio_data(bio, sizeof(struct dmz_bioctx));
+	struct dmz_bioctx *bioctx = kmalloc(sizeof(struct dmz_bioctx), GFP_KERNEL);
 	struct dmz_metadata *zmd = dmz->zmd;
 	int ret = DM_MAPIO_SUBMITTED;
 	unsigned long flags;
 
 	spin_lock_irqsave(&dmz->single_thread_lock, flags);
 
-	bioctx->dev = zmd->dev;
 	bioctx->bio = bio;
-
 	refcount_set(&bioctx->ref, 1);
 
 	switch (bio_op(bio)) {
 	case REQ_OP_READ:
-		ret = dmz_handle_read(dmz, bio);
+		ret = dmz_handle_read(dmz, bio, bioctx);
 		break;
 	case REQ_OP_WRITE:
-		ret = dmz_handle_write(dmz, bio);
+		ret = dmz_handle_write(dmz, bio, bioctx);
 		break;
 	case REQ_OP_DISCARD:
 	case REQ_OP_WRITE_ZEROES:

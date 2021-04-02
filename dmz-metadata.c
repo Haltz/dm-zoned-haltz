@@ -257,15 +257,16 @@ int dmz_load_metadata(struct dmz_metadata *zmd) {
 	zone_start->wp = zmd->useable_start;
 	pr_info("Zones succeed.\n");
 
-	if (!(~zmd->sblk->magic)) {
-		pr_info("Start Initlization.\n");
-		ret = dmz_reload_metadata(zmd);
-		if (ret) {
-			pr_err("Reload Failed.\n");
-			ret = -1;
-			goto reload;
-		}
-	}
+	/** There is no need to support flush right now. **/
+	// if (!(~zmd->sblk->magic)) {
+	// 	pr_info("Start Initlization.\n");
+	// 	ret = dmz_reload_metadata(zmd);
+	// 	if (ret) {
+	// 		pr_err("Reload Failed.\n");
+	// 		ret = -1;
+	// 		goto reload;
+	// 	}
+	// }
 
 	// Allocating large continuous memory for mapping table tends to fail.
 	// In such case, I allocate small memory for each zone to split mapping table, which reduce pressure for memory and still easy to update mapping table.

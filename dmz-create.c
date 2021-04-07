@@ -111,7 +111,7 @@ struct dmz_dev *dev_create(struct dmz_target *dmz) {
 
 	dev->disk = alloc_disk(1);
 	if (!dev->disk)
-		goto out;
+		goto allocdisk;
 
 	dev->disk->major = major;
 	dev->disk->first_minor = minor;
@@ -136,7 +136,7 @@ struct dmz_dev *dev_create(struct dmz_target *dmz) {
 
 	return dev;
 
-out:
+allocdisk:
 	if (dev->queue) {
 		blk_cleanup_queue(dev->queue);
 		dev->queue = NULL;
@@ -219,8 +219,6 @@ void dmz_dtr(struct dmz_target *dmz) {
 	dev_destroy(dmz);
 
 	blkdev_put(dmz->target_bdev, FMODE_READ | FMODE_WRITE);
-
-	kfree(dmz);
 }
 
 static int __init dmz_init(void) {
@@ -251,7 +249,12 @@ dmz_alloc:
 }
 
 static void __exit dmz_exit(void) {
+	if (dmz_tgt)
+		return;
+
 	dmz_dtr(dmz_tgt);
+
+	kfree(dmz_tgt);
 
 	unregister_blkdev(major, DEVICE_NAME);
 }

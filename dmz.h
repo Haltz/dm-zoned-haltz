@@ -53,7 +53,8 @@
 #define DMZ_BLOCK_SECTORS (DMZ_BLOCK_SIZE >> SECTOR_SHIFT)
 #define DMZ_BLOCK_SECTORS_MASK (DMZ_BLOCK_SECTORS - 1)
 
-#define DMZ_ZONE_BLOCKS_SHIFT (16)
+#define DMZ_ZONE_NR_BLOCKS_SHIFT (16)
+#define DMZ_ZONE_NR_BLOCKS_MASK ((1 << DMZ_ZONE_NR_BLOCKS_SHIFT) - 1)
 
 /*
  * 4KB block <-> 512B sector conversion.
@@ -168,10 +169,6 @@ struct dmz_target {
 	struct bio_set bio_set;
 
 	refcount_t ref;
-
-	// This lock is to simplify development of demo by making program single-thread.
-	// Disable it when pipeline is good.
-	spinlock_t single_thread_lock;
 };
 
 struct dmz_zone {
@@ -193,8 +190,10 @@ struct dmz_zone {
 	// bitmap block pbn
 	unsigned long bitmap_blk_n; // 8
 
+	// lock for pba_alloc and update_map
+	spinlock_t lock; // 4
+
 	// make sure size is power of 2
-	u8 reserved[4];
 };
 
 int dmz_ctr_reclaim(void);

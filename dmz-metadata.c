@@ -33,7 +33,7 @@ unsigned long *dmz_read_mblk(struct dmz_metadata *zmd, unsigned long pba, int nu
 
 io:
 	bio_put(bio);
-	kfree((void*)buffer);
+	kfree((void *)buffer);
 page:
 	return NULL;
 }
@@ -86,6 +86,8 @@ struct dmz_zone *dmz_load_zones(struct dmz_metadata *zmd, unsigned long *bitmap)
 			cur_zone->mt[j].block_id = ~0;
 			cur_zone->reverse_mt[j].block_id = ~0;
 		}
+
+		spin_lock_init(&cur_zone->lock);
 	}
 
 	int ret = blkdev_report_zones(zmd->target_bdev, 0, BLK_ALL_ZONES, dmz_init_zones_type, zone_start);
@@ -174,10 +176,10 @@ int dmz_reload_metadata(struct dmz_metadata *zmd) {
 			unsigned long next_readsize = readsize + (min(stepsize, zmd->nr_zone_mt_need_blocks - loc) << DMZ_BLOCK_SHIFT) / sizeof(struct dmz_map);
 			next_readsize = min(next_readsize, zmd->nr_blocks);
 
-			memcpy(&zone[i].mt[readsize], (void*)mt, next_readsize - readsize);
+			memcpy(&zone[i].mt[readsize], (void *)mt, next_readsize - readsize);
 			readsize = next_readsize;
 
-			kfree((void*)mt);
+			kfree((void *)mt);
 		}
 
 		readsize = 0;
@@ -191,10 +193,10 @@ int dmz_reload_metadata(struct dmz_metadata *zmd) {
 			unsigned long next_readsize = readsize + (min(stepsize, zmd->nr_zone_mt_need_blocks - loc) << DMZ_BLOCK_SHIFT) / sizeof(struct dmz_map);
 			next_readsize = min(next_readsize, zmd->nr_blocks);
 
-			memcpy(&zone[i].reverse_mt[readsize], (void*)rmt, next_readsize - readsize);
+			memcpy(&zone[i].reverse_mt[readsize], (void *)rmt, next_readsize - readsize);
 			readsize = next_readsize;
 
-			kfree((void*)rmt);
+			kfree((void *)rmt);
 		}
 		pr_info("Zone %d Good.\n", i);
 	}
@@ -272,7 +274,7 @@ bitmap:
 	return ret;
 }
 
-void dmz_unload_metadata(struct dmz_metadata* zmd){
+void dmz_unload_metadata(struct dmz_metadata *zmd) {
 	dmz_unload_bitmap(zmd);
 
 	dmz_unload_zones(zmd);
@@ -299,9 +301,9 @@ int dmz_ctr_metadata(struct dmz_target *dmz) {
 	strcpy(zmd->name, dev->name);
 
 	zmd->zone_nr_sectors = dev->nr_zone_sectors;
-	zmd->zone_nr_blocks = 1 << DMZ_ZONE_BLOCKS_SHIFT;
+	zmd->zone_nr_blocks = 1 << DMZ_ZONE_NR_BLOCKS_SHIFT;
 
-	zmd->nr_blocks = dev->nr_zones << DMZ_ZONE_BLOCKS_SHIFT;
+	zmd->nr_blocks = dev->nr_zones << DMZ_ZONE_NR_BLOCKS_SHIFT;
 	zmd->nr_zones = dev->nr_zones;
 
 	// how many blocks mappings of each zone needs. For example, 256MB zone need 128 Blocks to store mappings.
@@ -323,7 +325,6 @@ int dmz_ctr_metadata(struct dmz_target *dmz) {
 	spin_lock_init(&zmd->meta_lock);
 	spin_lock_init(&zmd->maptable_lock);
 	spin_lock_init(&zmd->bitmap_lock);
-	spin_lock_init(&dmz->single_thread_lock);
 
 	return 0;
 

@@ -210,16 +210,8 @@ read_err:
 int dmz_reclaim_zone(struct dmz_target *dmz, int zone) {
 	pr_info("Reclaim Zone %d.\n", zone);
 	struct dmz_metadata *zmd = dmz->zmd;
-	unsigned long sgth_flags;
 	struct dmz_zone *cur_zone = &zmd->zone_start[zone];
-	int ret = 0, locked = 0;
-
-	if (!spin_is_locked(&dmz->single_thread_lock)) {
-		locked = 0;
-		spin_lock_irqsave(&dmz->single_thread_lock, sgth_flags);
-	} else {
-		locked = 1;
-	}
+	int ret = 0;
 
 	unsigned long *bitmap = cur_zone->bitmap;
 
@@ -257,12 +249,8 @@ int dmz_reclaim_zone(struct dmz_target *dmz, int zone) {
 	if (ret)
 		pr_err("blkdev_zone_mgmt errcode %d\n", ret);
 
-	if (!locked)
-		spin_unlock_irqrestore(&dmz->single_thread_lock, sgth_flags);
-
 	return 0;
 
 reclaim_bio_err:
-	spin_unlock_irqrestore(&dmz->single_thread_lock, sgth_flags);
 	return -3;
 }

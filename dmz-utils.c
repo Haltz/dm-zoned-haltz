@@ -201,13 +201,6 @@ again:
  */
 int dmz_flush(struct dmz_target *dmz) {
 	struct dmz_metadata *zmd = dmz->zmd;
-	int locked = 0;
-	unsigned long flags;
-	if (spin_is_locked(&dmz->single_thread_lock)) {
-		locked = 1;
-	} else {
-		spin_lock_irqsave(&dmz->single_thread_lock, flags);
-	}
 
 	struct dmz_zone *zone = zmd->zone_start;
 	unsigned long prev = ~0, chosen = 0;
@@ -224,10 +217,6 @@ int dmz_flush(struct dmz_target *dmz) {
 	// if (ret) {
 	// 	pr_err("flush failed.\n");
 	// }
-
-	if (!locked) {
-		spin_unlock_irqrestore(&dmz->single_thread_lock, flags);
-	}
 
 	return 0;
 }

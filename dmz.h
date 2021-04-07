@@ -197,8 +197,6 @@ struct dmz_zone {
 	u8 reserved[4];
 };
 
-int dmz_ctr_metadata(struct dmz_target *);
-void dmz_dtr_metadata(struct dmz_metadata *);
 int dmz_ctr_reclaim(void);
 int dmz_reclaim_zone(struct dmz_target *dmz, int zone);
 
@@ -210,5 +208,8 @@ unsigned long dmz_reclaim_pba_alloc(struct dmz_target *dmz, int reclaim_zone);
 
 int dmz_flush(struct dmz_target *dmz);
 int dmz_map(struct dmz_target *dmz, struct bio *bio);
+
+/** functions defined in dmz-metadata.h depends on structs defined above. **/
+#include "dmz-metadata.h"
 
 #endif

@@ -1,4 +1,4 @@
-#include "dmz.h"
+#include "dmz-metadata.h"
 
 /*
  * Metadata block state flags.
@@ -24,11 +24,6 @@ unsigned long *dmz_read_mblk(struct dmz_metadata *zmd, unsigned long pba, int nu
 	bio_set_op_attrs(bio, REQ_OP_READ, 0);
 	bio->bi_iter.bi_sector = pba << 3;
 	submit_bio_wait(bio);
-	// for (int i = 0; i < num; i++) {
-	// 	if (PageError(virt_to_page(buffer + (i << 9)))) {
-	// 		goto io;
-	// 	}
-	// }
 	if (bio->bi_status != BLK_STS_OK) {
 		goto io;
 	}
@@ -38,6 +33,7 @@ unsigned long *dmz_read_mblk(struct dmz_metadata *zmd, unsigned long pba, int nu
 
 io:
 	bio_put(bio);
+	kfree((void*)buffer);
 page:
 	return NULL;
 }
@@ -68,7 +64,7 @@ static int dmz_init_zones_type(struct blk_zone *blkz, unsigned int num, void *da
 struct dmz_zone *dmz_load_zones(struct dmz_metadata *zmd, unsigned long *bitmap) {
 	struct dmz_zone *zone_start = kzalloc(zmd->nr_zones * sizeof(struct dmz_zone), GFP_KERNEL);
 	if (!zone_start) {
-		return NULL;
+		goto out;
 	}
 
 	for (int i = 0; i < zmd->nr_zones; i++) {
@@ -79,10 +75,12 @@ struct dmz_zone *dmz_load_zones(struct dmz_metadata *zmd, unsigned long *bitmap)
 		cur_zone->mt = kzalloc(zmd->zone_nr_blocks * sizeof(struct dmz_map), GFP_KERNEL);
 		if (!cur_zone->mt) {
 			pr_err("mt err.\n");
+			goto mt;
 		}
 		cur_zone->reverse_mt = kzalloc(zmd->zone_nr_blocks * sizeof(struct dmz_map), GFP_KERNEL);
 		if (!cur_zone->reverse_mt) {
 			pr_err("reverse_mt err.\n");
+			goto mt;
 		}
 		for (int j = 0; j < zmd->zone_nr_blocks; j++) {
 			cur_zone->mt[j].block_id = ~0;
@@ -97,21 +95,30 @@ struct dmz_zone *dmz_load_zones(struct dmz_metadata *zmd, unsigned long *bitmap)
 	}
 
 	return zone_start;
+
+mt:
+	dmz_unload_zones(zmd);
+out:
+	return NULL;
 }
 
 void dmz_unload_zones(struct dmz_metadata *zmd) {
 	struct dmz_zone *zone = zmd->zone_start;
+
 	if (!zone)
 		return;
+
 	for (int i = 0; i < zmd->nr_zones; i++) {
 		struct dmz_zone *cur = &zone[i];
 		if (!cur) {
 			pr_err("dmz_unload_zones err");
 			continue;
 		}
+
 		if (cur->mt) {
 			kfree(cur->mt);
 		}
+
 		if (cur->reverse_mt) {
 			kfree(cur->reverse_mt);
 		}
@@ -135,7 +142,6 @@ unsigned long *dmz_load_bitmap(struct dmz_metadata *zmd) {
 
 void dmz_unload_bitmap(struct dmz_metadata *zmd) {
 	if (!zmd->bitmap_start) {
-		pr_err("dmz_unload_bitmap");
 		return;
 	}
 
@@ -154,8 +160,6 @@ int dmz_reload_metadata(struct dmz_metadata *zmd) {
 	}
 	memcpy(zmd->zone_start, zones_info, zmd->nr_zones * sizeof(struct dmz_zone));
 	kfree(zones_info);
-
-	pr_info("Ac1\n");
 
 	int stepsize = min(MAX_NR_BLOCKS_ONCE_READ, zmd->nr_zone_mt_need_blocks);
 	for (int i = 0; i < zmd->nr_zones; i++) {
@@ -228,10 +232,7 @@ int dmz_load_metadata(struct dmz_metadata *zmd) {
 	// Temporary set 256.
 	zmd->useable_start = 1;
 
-	// struct dmz_map *map_ptr = dmz_load_map(zmd);
-
 	unsigned long *bitmap_ptr = dmz_load_bitmap(zmd);
-	// unsigned long *bitmap_ptr = bitmap_alloc(zmd->capacity >> 3, GFP_KERNEL);
 	if (!bitmap_ptr) {
 		ret = -ENOMEM;
 		goto bitmap;
@@ -262,12 +263,19 @@ int dmz_load_metadata(struct dmz_metadata *zmd) {
 
 	// Allocating large continuous memory for mapping table tends to fail.
 	// In such case, I allocate small memory for each zone to split mapping table, which reduce pressure for memory and still easy to update mapping table.
-	return 0;
+	return ret;
 
 zones:
+	dmz_unload_bitmap(zmd);
 bitmap:
 	pr_err("Load metadata failed.\n");
 	return ret;
+}
+
+void dmz_unload_metadata(struct dmz_metadata* zmd){
+	dmz_unload_bitmap(zmd);
+
+	dmz_unload_zones(zmd);
 }
 
 int dmz_ctr_metadata(struct dmz_target *dmz) {
@@ -282,7 +290,7 @@ int dmz_ctr_metadata(struct dmz_target *dmz) {
 
 	zmd = kzalloc(sizeof(struct dmz_metadata), GFP_KERNEL);
 	if (!zmd) {
-		return -ENOMEM;
+		goto alloc;
 	}
 
 	zmd->capacity = dev->capacity;
@@ -307,25 +315,31 @@ int dmz_ctr_metadata(struct dmz_target *dmz) {
 
 	ret = dmz_load_metadata(zmd);
 	if (ret) {
-		return ret;
+		goto load_meta;
 	}
 
 	dmz->zmd = zmd;
 
+	spin_lock_init(&zmd->meta_lock);
+	spin_lock_init(&zmd->maptable_lock);
+	spin_lock_init(&zmd->bitmap_lock);
+	spin_lock_init(&dmz->single_thread_lock);
+
 	return 0;
+
+load_meta:
+	kfree(zmd);
+alloc:
+	return -1;
 }
 
 void dmz_dtr_metadata(struct dmz_metadata *zmd) {
 	if (!zmd)
 		return;
 
-	if (zmd->sblk) {
-		kfree(zmd->sblk);
-	}
+	kfree(zmd->sblk);
 
-	// dmz_unload_bitmap(zmd);
-	// dmz_unload_zones(zmd);
+	dmz_unload_metadata(zmd);
 
-	if (zmd)
-		kfree(zmd);
+	kfree(zmd);
 }

@@ -141,7 +141,7 @@ out:
 		blk_cleanup_queue(dev->queue);
 		dev->queue = NULL;
 	}
-	
+
 	if (dev->disk)
 		put_disk(dev->disk);
 
@@ -175,37 +175,36 @@ int dmz_ctr(struct dmz_target *dmz) {
 
 	dmz->target_bdev = blkdev_get_by_path(DEVICE_PATH, FMODE_READ | FMODE_WRITE, NULL);
 	if (IS_ERR(dmz->target_bdev)) {
-		return -ENOMEM;
+		goto target_bdev;
 	}
 
 	refcount_set(&dmz->ref, 1);
 
 	dmz->dev = dev_create(dmz);
 	if (!dmz->dev) {
-		return -ENOMEM;
+		goto dev_create;
 	}
 
 	ret = bioset_init(&dmz->bio_set, DMZ_MIN_BIOS, 0, 0);
 	if (ret) {
-		dev_destroy(dmz);
-		return -ENOMEM;
+		goto bioset;
 	}
 
 	ret = dmz_ctr_metadata(dmz);
 	if (ret) {
-		dev_destroy(dmz);
-		bioset_exit(&dmz->bio_set);
-		return -ENOMEM;
+		goto ctr_meta;
 	}
 
-	struct dmz_metadata *zmd = dmz->zmd;
-
-	spin_lock_init(&zmd->meta_lock);
-	spin_lock_init(&zmd->maptable_lock);
-	spin_lock_init(&zmd->bitmap_lock);
-	spin_lock_init(&dmz->single_thread_lock);
-
 	return 0;
+
+ctr_meta:
+	bioset_exit(&dmz->bio_set);
+bioset:
+	dev_destroy(dmz);
+dev_create:
+	blkdev_put(dmz->target_bdev, FMODE_READ | FMODE_WRITE);
+target_bdev:
+	return -1;
 }
 
 void dmz_dtr(struct dmz_target *dmz) {
@@ -213,15 +212,13 @@ void dmz_dtr(struct dmz_target *dmz) {
 		return;
 	}
 
-	// dmz_flush(dmz);
-
 	dmz_dtr_metadata(dmz->zmd);
 
 	bioset_exit(&dmz->bio_set);
 
 	dev_destroy(dmz);
 
-	bdput(dmz->target_bdev);
+	blkdev_put(dmz->target_bdev, FMODE_READ | FMODE_WRITE);
 
 	kfree(dmz);
 }
@@ -231,21 +228,25 @@ static int __init dmz_init(void) {
 
 	dmz_tgt = kzalloc(sizeof(struct dmz_target), GFP_KERNEL);
 	if (!dmz_tgt) {
-		goto out;
+		goto dmz_alloc;
 	}
 
 	r = dmz_ctr(dmz_tgt);
 	if (r) {
-		goto out;
+		goto dmz_ctr;
 	}
 
 	r = register_blkdev(major, DEVICE_NAME);
 	if (r < 0)
-		goto out;
+		goto dmz_register;
 
 	return 0;
 
-out:
+dmz_register:
+	dmz_dtr(dmz_tgt);
+dmz_ctr:
+	kfree(dmz_tgt);
+dmz_alloc:
 	return r;
 }
 

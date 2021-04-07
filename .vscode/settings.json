@@ -8,6 +8,7 @@
         "*.tcc": "c",
         "sstream": "c",
         "dmz.h": "c",
-        "mm.h": "c"
+        "mm.h": "c",
+        "dmz-metadata.h": "c"
     }
 }

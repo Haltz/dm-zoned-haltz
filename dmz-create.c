@@ -1,7 +1,7 @@
 #include "dmz.h"
 
 #define DEVICE_NAME "dm"
-#define DEVICE_PATH "/dev/sdb"
+#define DEVICE_PATH "/dev/nullb0"
 
 static unsigned int major = 255;
 
@@ -104,9 +104,7 @@ struct dmz_dev *dev_create(struct dmz_target *dmz) {
 	dev->queue = blk_mq_init_queue_data(set, dmz);
 
 	if (IS_ERR(dev->queue)) {
-		blk_mq_free_tag_set(set);
-		dev->queue = NULL;
-		goto out;
+		goto set;
 	}
 
 	blk_queue_max_hw_sectors(dev->queue, BLK_DEF_MAX_SECTORS);
@@ -120,10 +118,8 @@ struct dmz_dev *dev_create(struct dmz_target *dmz) {
 	dev->disk->fops = &dmz_blk_dops;
 	dev->disk->queue = dev->queue;
 	dev->disk->private_data = dev;
-	sprintf(dev->disk->disk_name, "dm-0", minor);
+	sprintf(dev->disk->disk_name, "dm-%d", minor);
 	set_capacity(dev->disk, i_size_read(dmz->target_bdev->bd_inode) >> SECTOR_SHIFT);
-
-	pr_info("Capacity: %x\n", i_size_read(dmz->target_bdev->bd_inode) >> SECTOR_SHIFT);
 
 	add_disk(dev->disk);
 	format_dev_t(dev->major_minor_id, MKDEV(major, minor));
@@ -135,29 +131,17 @@ struct dmz_dev *dev_create(struct dmz_target *dmz) {
 	sprintf(dev->name, "dm-%d", minor);
 	// bdevname(dev->bdev, dev->name);
 
-	if (!dmz->target_bdev) {
-		pr_err("target bdev null 1\n");
-		dev->nr_zones = 80;
-		dev->nr_zone_sectors = 64 * KB;
-		return dev;
-	}
-
-	if (!dmz->target_bdev->bd_disk) {
-		pr_err("target bdev null 2\n");
-		dev->nr_zones = 80;
-		dev->nr_zone_sectors = 64 * KB;
-		return dev;
-	}
 	dev->nr_zones = blkdev_nr_zones(dmz->target_bdev->bd_disk);
 	dev->nr_zone_sectors = blk_queue_zone_sectors(dmz->target_bdev->bd_disk->queue);
-
-	pr_info("dev_info: %d %d\n", dev->nr_zones, dev->nr_zone_sectors);
 
 	return dev;
 
 out:
-	if (dev->queue)
+	if (dev->queue) {
 		blk_cleanup_queue(dev->queue);
+		dev->queue = NULL;
+	}
+	
 	if (dev->disk)
 		put_disk(dev->disk);
 

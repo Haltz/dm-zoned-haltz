@@ -20,7 +20,6 @@ struct dmz_clone_bioctx {
 // return zone_id which free block is available
 int dmz_pba_alloc(struct dmz_target *dmz) {
 	struct dmz_metadata *zmd = dmz->zmd;
-	unsigned long flags;
 
 	for (int i = 1; i < zmd->nr_zones; i++) {
 		// spin_lock_irqsave(&zmd->meta_lock, flags);
@@ -35,7 +34,6 @@ int dmz_pba_alloc(struct dmz_target *dmz) {
 }
 
 unsigned long dmz_get_map(struct dmz_metadata *zmd, unsigned long lba) {
-	unsigned long flags;
 	unsigned long index = lba / zmd->zone_nr_blocks;
 	unsigned long offset = lba % zmd->zone_nr_blocks;
 
@@ -51,7 +49,6 @@ unsigned long dmz_get_map(struct dmz_metadata *zmd, unsigned long lba) {
 // map logic to physical. if unmapped, return 0xffff ffff ffff ffff(default reserved blk_id representing invalid)
 unsigned long dmz_l2p(struct dmz_target *dmz, sector_t lba) {
 	struct dmz_metadata *zmd = dmz->zmd;
-	unsigned long flags;
 
 	// spin_lock_irqsave(&zmd->maptable_lock, flags);
 
@@ -82,7 +79,6 @@ void dmz_update_map(struct dmz_target *dmz, unsigned long lba, unsigned long pba
 	struct dmz_metadata *zmd = dmz->zmd;
 	int index = lba / zmd->zone_nr_blocks;
 	int offset = lba % zmd->zone_nr_blocks;
-	unsigned long flags;
 
 	struct dmz_zone *cur_zone = &zmd->zone_start[index];
 	// spin_lock_irqsave(&zmd->maptable_lock, flags);
@@ -120,7 +116,6 @@ void dmz_clone_endio(struct bio *clone) {
 	struct dmz_target *dmz = clone_bioctx->dmz;
 	struct dmz_metadata *zmd = dmz->zmd;
 	struct dmz_bioctx *bioctx = clone_bioctx->bioctx;
-	unsigned long flags;
 
 	pr_info("Clone Endio\n");
 
@@ -151,12 +146,10 @@ int dmz_submit_bio(struct dmz_target *dmz, struct bio *bio, struct dmz_bioctx *b
 	struct dmz_metadata *zmd = dmz->zmd;
 	int op = bio_op(bio);
 
-	unsigned long lock_flags, mt_flags;
-
 	sector_t nr_sectors = bio_sectors(bio), logic_sector = bio->bi_iter.bi_sector;
 	sector_t nr_blocks = dmz_sect2blk(nr_sectors), lba = dmz_sect2blk(logic_sector);
 
-	pr_info("nr_sectors: %d, lsector: %d\n", nr_sectors, logic_sector);
+	pr_info("nr_sectors: %lld, lsector: %lld\n", nr_sectors, logic_sector);
 	if ((nr_sectors & 0x7 || logic_sector & 0x7) && bio_op(bio) == REQ_OP_READ) {
 		bio_set_dev(bio, zmd->target_bdev);
 		submit_bio(bio);
@@ -281,7 +274,6 @@ int dmz_handle_write(struct dmz_target *dmz, struct bio *bio, struct dmz_bioctx 
 int dmz_handle_discard(struct dmz_target *dmz, struct bio *bio) {
 	// pr_info("Discard or write zeros\n");
 	struct dmz_metadata *zmd = dmz->zmd;
-	struct dmz_zone *zone = zmd->zone_start;
 
 	int ret = 0;
 
@@ -311,12 +303,11 @@ int dmz_handle_discard(struct dmz_target *dmz, struct bio *bio) {
 
 /* Map bio */
 int dmz_map(struct dmz_target *dmz, struct bio *bio) {
-	pr_info("Map: bi_sector: %llx\t bi_size: %x\n", bio->bi_iter.bi_sector, bio->bi_iter.bi_size);
-	pr_info("start_sector: %lld, nr_sectors: %d op: %d\n", bio->bi_iter.bi_sector, bio_sectors(bio), bio_op(bio));
+	// pr_info("Map: bi_sector: %llx\t bi_size: %x\n", bio->bi_iter.bi_sector, bio->bi_iter.bi_size);
+	// pr_info("start_sector: %lld, nr_sectors: %d op: %d\n", bio->bi_iter.bi_sector, bio_sectors(bio), bio_op(bio));
 
 	// struct dmz_bioctx *bioctx = dm_per_bio_data(bio, sizeof(struct dmz_bioctx));
 	struct dmz_bioctx *bioctx = kmalloc(sizeof(struct dmz_bioctx), GFP_KERNEL);
-	struct dmz_metadata *zmd = dmz->zmd;
 	int ret = DM_MAPIO_SUBMITTED;
 	unsigned long flags;
 

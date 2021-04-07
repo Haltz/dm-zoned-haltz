@@ -38,8 +38,6 @@ unsigned long *dmz_read_mblk(struct dmz_metadata *zmd, unsigned long pba, int nu
 
 io:
 	bio_put(bio);
-bio:
-	kfree(buffer);
 page:
 	return NULL;
 }
@@ -126,17 +124,13 @@ void dmz_unload_zones(struct dmz_metadata *zmd) {
 unsigned long *dmz_load_bitmap(struct dmz_metadata *zmd) {
 	// First >>3 is sector to block, second >>3 is bit to byte
 	zmd->nr_bitmap_blocks = zmd->capacity >> 3 >> 3 >> DMZ_BLOCK_SHIFT;
-	pr_info("[dmz-load]: bitmap loading, %lld bitmap blocks in total.\n", zmd->nr_bitmap_blocks);
+	pr_info("[dmz-load]: bitmap loading, %ld bitmap blocks in total.\n", zmd->nr_bitmap_blocks);
 	unsigned long *bitmap = bitmap_zalloc(zmd->capacity >> 3, GFP_KERNEL);
 	if (!bitmap) {
 		return NULL;
 	}
 
 	return bitmap;
-
-read_err:
-	pr_err("[dmz-err]: read bitmap err.\n");
-	return NULL;
 }
 
 void dmz_unload_bitmap(struct dmz_metadata *zmd) {
@@ -165,27 +159,27 @@ int dmz_reload_metadata(struct dmz_metadata *zmd) {
 
 	int stepsize = min(MAX_NR_BLOCKS_ONCE_READ, zmd->nr_zone_mt_need_blocks);
 	for (int i = 0; i < zmd->nr_zones; i++) {
-		pr_info("id: %d, m: %x, rm: %x, bm: %x\n", i, zone[i].mt_blk_n, zone[i].rmt_blk_n, zone[i].bitmap_blk_n);
+		pr_info("id: %d, m: %lx, rm: %lx, bm: %lx\n", i, zone[i].mt_blk_n, zone[i].rmt_blk_n, zone[i].bitmap_blk_n);
 		// reload mappings
 		unsigned long readsize = 0;
 		for (int loc = 0; loc < zmd->nr_zone_mt_need_blocks; loc += stepsize) {
-			unsigned long mt = dmz_read_mblk(zmd, zone[i].mt_blk_n, min(stepsize, zmd->nr_zone_mt_need_blocks - loc));
+			unsigned long mt = (unsigned long)dmz_read_mblk(zmd, zone[i].mt_blk_n, min(stepsize, zmd->nr_zone_mt_need_blocks - loc));
 			if (!mt) {
 				goto err;
 			}
 			unsigned long next_readsize = readsize + (min(stepsize, zmd->nr_zone_mt_need_blocks - loc) << DMZ_BLOCK_SHIFT) / sizeof(struct dmz_map);
 			next_readsize = min(next_readsize, zmd->nr_blocks);
 
-			memcpy(&zone[i].mt[readsize], mt, next_readsize - readsize);
+			memcpy(&zone[i].mt[readsize], (void*)mt, next_readsize - readsize);
 			readsize = next_readsize;
 
-			kfree(mt);
+			kfree((void*)mt);
 		}
 
 		readsize = 0;
 		// reload reverse_mappings
 		for (int loc = 0; loc < zmd->nr_zone_mt_need_blocks; loc += stepsize) {
-			unsigned long rmt = dmz_read_mblk(zmd, zone[i].mt_blk_n, min(stepsize, zmd->nr_zone_mt_need_blocks - loc));
+			unsigned long rmt = (unsigned long)dmz_read_mblk(zmd, zone[i].mt_blk_n, min(stepsize, zmd->nr_zone_mt_need_blocks - loc));
 			if (!rmt) {
 				goto err;
 			}
@@ -193,10 +187,10 @@ int dmz_reload_metadata(struct dmz_metadata *zmd) {
 			unsigned long next_readsize = readsize + (min(stepsize, zmd->nr_zone_mt_need_blocks - loc) << DMZ_BLOCK_SHIFT) / sizeof(struct dmz_map);
 			next_readsize = min(next_readsize, zmd->nr_blocks);
 
-			memcpy(&zone[i].reverse_mt[readsize], rmt, next_readsize - readsize);
+			memcpy(&zone[i].reverse_mt[readsize], (void*)rmt, next_readsize - readsize);
 			readsize = next_readsize;
 
-			kfree(rmt);
+			kfree((void*)rmt);
 		}
 		pr_info("Zone %d Good.\n", i);
 	}
@@ -224,7 +218,6 @@ int dmz_load_metadata(struct dmz_metadata *zmd) {
 
 	unsigned long *sblk = dmz_read_mblk(zmd, 0, 1);
 	zmd->sblk = (struct dmz_super *)sblk;
-	pr_info("Read Info: %d %d\n", zmd->sblk->magic, zmd->sblk->zones_info);
 
 	zmd->nr_blocks = zmd->capacity >> 3; // the unit of capacity is sectors
 
@@ -236,7 +229,6 @@ int dmz_load_metadata(struct dmz_metadata *zmd) {
 	zmd->useable_start = 1;
 
 	// struct dmz_map *map_ptr = dmz_load_map(zmd);
-	pr_info("mapping table size: %lld\n", zmd->nr_blocks * sizeof(struct dmz_map));
 
 	unsigned long *bitmap_ptr = dmz_load_bitmap(zmd);
 	// unsigned long *bitmap_ptr = bitmap_alloc(zmd->capacity >> 3, GFP_KERNEL);
@@ -272,12 +264,8 @@ int dmz_load_metadata(struct dmz_metadata *zmd) {
 	// In such case, I allocate small memory for each zone to split mapping table, which reduce pressure for memory and still easy to update mapping table.
 	return 0;
 
-reload:
 zones:
 bitmap:
-map:
-super:
-mblk:
 	pr_err("Load metadata failed.\n");
 	return ret;
 }

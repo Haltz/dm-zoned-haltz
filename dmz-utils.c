@@ -36,38 +36,7 @@ write_err:
 	return -1;
 }
 
-struct page *dmz_read_block(struct dmz_metadata *zmd, unsigned long pba) {
-	struct page *page = alloc_page(GFP_KERNEL);
-	if (!page) {
-		goto alloc_page;
-	}
-	struct bio *bio = bio_alloc(GFP_KERNEL, 1);
-	if (!bio)
-		goto alloc_bio;
-
-	bio_add_page(bio, page, DMZ_BLOCK_SIZE, 0);
-	bio_set_dev(bio, zmd->target_bdev);
-	bio_set_op_attrs(bio, REQ_OP_READ, 0);
-	bio->bi_iter.bi_sector = pba << 3;
-	submit_bio_wait(bio);
-	bio_put(bio);
-
-	if (PageError(page)) {
-		goto read_err;
-	}
-
-	return 0;
-
-alloc_page:
-	return -1;
-alloc_bio:
-	return -1;
-read_err:
-	return -1;
-}
-
 int dmz_determine_target_zone(struct dmz_metadata *zmd, int need, unsigned long *wp_after_flush, unsigned long *target_zones, int index) {
-	struct dmz_zone *zone = zmd->zone_start;
 	unsigned long wp;
 	int target_zone = ~0;
 	for (int i = 0; i < zmd->nr_zones; i++) {
@@ -90,8 +59,6 @@ int dmz_determine_target_zone(struct dmz_metadata *zmd, int need, unsigned long 
 int dmz_flush_do(struct dmz_target *dmz) {
 	struct dmz_metadata *zmd = dmz->zmd;
 	struct dmz_zone *zone = zmd->zone_start;
-	unsigned long *bitmap = zmd->bitmap_start;
-	unsigned long flags;
 	int ret = 0, reclaim_zone = 0;
 
 	ret = dmz_reclaim_zone(dmz, reclaim_zone++);
@@ -131,8 +98,8 @@ repeat_try:
 		wp_after_flush[i] = zone[i].wp;
 
 	for (int i = 0; i < zmd->nr_zones; i++) {
-		if (dmz_determine_target_zone(zmd, nr_zone_mt_need_blocks, wp_after_flush, mapping_target_zones, i) \ 
-		|| dmz_determine_target_zone(zmd, nr_zone_mt_need_blocks, wp_after_flush, rmapping_target_zones, i) \ 
+		if (dmz_determine_target_zone(zmd, nr_zone_mt_need_blocks, wp_after_flush, mapping_target_zones, i) 
+		|| dmz_determine_target_zone(zmd, nr_zone_mt_need_blocks, wp_after_flush, rmapping_target_zones, i) 
 		|| dmz_determine_target_zone(zmd, nr_zone_bitmap_need_blocks, wp_after_flush, bitmap_target_zones, i)) {
 			goto again;
 		}
@@ -234,7 +201,7 @@ again:
  */
 int dmz_flush(struct dmz_target *dmz) {
 	struct dmz_metadata *zmd = dmz->zmd;
-	int locked = 0, ret = 0;
+	int locked = 0;
 	unsigned long flags;
 	if (spin_is_locked(&dmz->single_thread_lock)) {
 		locked = 1;
@@ -263,8 +230,4 @@ int dmz_flush(struct dmz_target *dmz) {
 	}
 
 	return 0;
-
-ptr_null:
-	pr_err("dmz-flush ptr_null.\n");
-	return -1;
 }

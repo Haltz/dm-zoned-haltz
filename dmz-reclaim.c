@@ -19,10 +19,6 @@ unsigned long dmz_p2l(struct dmz_metadata *zmd, unsigned long pba) {
 }
 
 void dmz_reclaim_write_bio_endio(struct bio *bio) {
-	struct bvec_iter_all iter_all;
-	struct bio_vec *bv = bio->bi_io_vec;
-	struct page *page = bv->bv_page;
-	unsigned long buffer = page_address(page);
 	struct page *private = bio->bi_private;
 
 	// read failed.
@@ -39,10 +35,8 @@ void dmz_reclaim_write_bio_endio(struct bio *bio) {
 }
 
 void dmz_reclaim_read_bio_endio(struct bio *bio) {
-	struct bvec_iter_all iter_all;
 	struct bio_vec *bv = bio->bi_io_vec;
 	struct page *page = bv->bv_page;
-	unsigned long buffer = page_address(page);
 	struct page *private = bio->bi_private;
 
 	// read failed.
@@ -59,12 +53,12 @@ void dmz_reclaim_read_bio_endio(struct bio *bio) {
 	bio_put(bio);
 }
 
-unsigned long dmz_reclaim_read_block(struct dmz_target *dmz, unsigned long pba) {
+void* dmz_reclaim_read_block(struct dmz_target *dmz, unsigned long pba) {
 	struct dmz_metadata *zmd = dmz->zmd;
 	struct page *page = alloc_page(GFP_KERNEL);
 	if (!page)
 		goto buffer_alloc;
-	unsigned long buffer = page_address(page);
+	unsigned long buffer = (unsigned long)page_address(page);
 
 	struct bio *rbio = bio_alloc(GFP_KERNEL, 1);
 	if (!rbio)
@@ -93,7 +87,7 @@ unsigned long dmz_reclaim_read_block(struct dmz_target *dmz, unsigned long pba) 
 	}
 	unlock_page(page);
 
-	return buffer;
+	return (void*)buffer;
 
 read_err:
 	unlock_page(page);
@@ -146,7 +140,6 @@ invalid_kaddr:
  */
 unsigned long dmz_reclaim_pba_alloc(struct dmz_target *dmz, int reclaim_zone) {
 	struct dmz_metadata *zmd = dmz->zmd;
-	unsigned long flags;
 
 	for (int i = 0; i < zmd->nr_zones; i++) {
 		if (i == reclaim_zone)
@@ -182,7 +175,7 @@ int dmz_make_reclaim_bio(struct dmz_target *dmz, unsigned long lba) {
 	// pr_info("%x, %x, %x\n", lba, index, offset);
 	unsigned long pba = zmd->zone_start[index].mt[offset].block_id;
 
-	unsigned long buffer = dmz_reclaim_read_block(dmz, pba);
+	unsigned long buffer = (unsigned long)dmz_reclaim_read_block(dmz, pba);
 	if (!buffer) {
 		goto read_err;
 	}
@@ -217,8 +210,7 @@ read_err:
 int dmz_reclaim_zone(struct dmz_target *dmz, int zone) {
 	pr_info("Reclaim Zone %d.\n", zone);
 	struct dmz_metadata *zmd = dmz->zmd;
-	unsigned long flags, sgth_flags;
-	unsigned long remain = 0;
+	unsigned long sgth_flags;
 	struct dmz_zone *cur_zone = &zmd->zone_start[zone];
 	int ret = 0, locked = 0;
 
@@ -230,8 +222,6 @@ int dmz_reclaim_zone(struct dmz_target *dmz, int zone) {
 	}
 
 	unsigned long *bitmap = cur_zone->bitmap;
-	unsigned int wp = cur_zone->wp;
-	struct dmz_map *map = cur_zone->mt;
 
 	// for (unsigned long offset = 0; offset < zmd->zone_nr_blocks; offset++) {
 	for (unsigned long offset = 0; offset < zmd->zone_nr_blocks; offset++) {
@@ -275,10 +265,4 @@ int dmz_reclaim_zone(struct dmz_target *dmz, int zone) {
 reclaim_bio_err:
 	spin_unlock_irqrestore(&dmz->single_thread_lock, sgth_flags);
 	return -3;
-pba_err:
-	spin_unlock_irqrestore(&dmz->single_thread_lock, sgth_flags);
-	return -2;
-make_bio:
-	spin_unlock_irqrestore(&dmz->single_thread_lock, sgth_flags);
-	return -1;
 }

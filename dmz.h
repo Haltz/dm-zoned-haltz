@@ -127,8 +127,8 @@ struct dmz_metadata {
 
 	// locks
 	spinlock_t meta_lock;
-	spinlock_t maptable_lock;
-	spinlock_t bitmap_lock;
+	struct mutex reclaim_lock;
+	struct mutex freezone_lock;
 };
 
 /** Note: sizeof(struct dmz_map) must be power of 2 to make sure block_size is aligned to sizeof(struct dmz_map) **/
@@ -191,8 +191,11 @@ struct dmz_zone {
 	// bitmap block pbn
 	unsigned long bitmap_blk_n; // 8
 
-	// lock for pba_alloc and update_map
+	// lock for wp
 	spinlock_t lock; // 4
+
+	// lock for io
+	struct mutex io_lock; // 32
 };
 
 int dmz_ctr_reclaim(void);

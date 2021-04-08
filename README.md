@@ -5,3 +5,10 @@
 Linux kernel已经有dm-zoned内核模块，但是dm-zoned有如下缺点：
 - 不能尽可能有效的利用磁盘空间。dm-zoned需要至少三个conventional zone作为保留空间（分别存储metadata，mapping+bitmap以及至少一个作为buffer zone）。
 - 随机读写速度过慢。随机读写会导致频繁的擦除和zone内所有有效块的复制。
+
+FTL可以帮助解决这两个问题。目前采用的是Page-Mapping的FTL。
+
+## TODO
+- [ ] 多线程锁的同步
+- [ ] 热数据缓存
+- [ ] Block-Mapping是否比Page-Mapping更优？

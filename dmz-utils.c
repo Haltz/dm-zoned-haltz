@@ -2,7 +2,7 @@
 #include <linux/mm.h>
 
 unsigned long meta_flags;
-unsigned long* zone_lock_flags;
+unsigned long *zone_lock_flags;
 
 // TODO inc_wp should trigger recliam process under proper circumustance.
 int dmz_inc_wp(struct dmz_metadata *zmd, struct dmz_zone *zone) {
@@ -135,7 +135,7 @@ repeat_try:
 	memcpy(super, zmd->sblk, 512);
 	super->magic = ~0;
 	super->zones_info = zone_struct_target_zonewp;
-	zone[zone_struct_target_zonewp / zmd->zone_nr_blocks].wp += nr_zone_struct_need_blocks;
+	zone[zone_struct_target_zonewp >> DMZ_BLOCK_SHIFT].wp += nr_zone_struct_need_blocks;
 
 	ret = dmz_write_block(zmd, 0, virt_to_page(super));
 	if (ret) {
@@ -225,12 +225,13 @@ int dmz_flush(struct dmz_target *dmz) {
 
 int dmz_locks_init(struct dmz_metadata *zmd) {
 	spin_lock_init(&zmd->meta_lock);
-	spin_lock_init(&zmd->bitmap_lock);
-	spin_lock_init(&zmd->maptable_lock);
+	mutex_init(&zmd->reclaim_lock);
+	mutex_init(&zmd->freezone_lock);
 
 	struct dmz_zone *zone = zmd->zone_start;
 	for (int i = 0; i < zmd->nr_zones; i++) {
 		spin_lock_init(&zone[i].lock);
+		mutex_init(&zone[i].io_lock);
 	}
 
 	zone_lock_flags = kcalloc(zmd->nr_zones, sizeof(unsigned long), GFP_KERNEL);
@@ -277,4 +278,39 @@ void dmz_unlock_zone(struct dmz_metadata *zmd, int idx) {
 		return;
 
 	spin_unlock_irqrestore(&zone[idx].lock, zone_lock_flags[idx]);
+}
+
+void dmz_start_io(struct dmz_metadata *zmd, int idx) {
+	struct dmz_zone *zone = zmd->zone_start;
+	mutex_lock(&zone[idx].io_lock);
+}
+
+void dmz_complete_io(struct dmz_metadata *zmd, int idx) {
+	struct dmz_zone *zone = zmd->zone_start;
+	mutex_unlock(&zone[idx].io_lock);
+}
+
+int dmz_is_on_io(struct dmz_metadata *zmd, int idx) {
+	struct dmz_zone *zone = zmd->zone_start;
+
+	if (mutex_is_locked(&zone[idx].io_lock))
+		return 1;
+
+	return 0;
+}
+
+int dmz_lock_reclaim(struct dmz_metadata *zmd) {
+	if (mutex_is_locked(&zmd->reclaim_lock))
+		return -1;
+
+	mutex_lock(&zmd->reclaim_lock);
+
+	return 0;
+}
+
+void dmz_unlock_reclaim(struct dmz_metadata *zmd) {
+	if (!mutex_is_locked(&zmd->reclaim_lock))
+		return;
+
+	mutex_unlock(&zmd->reclaim_lock);
 }

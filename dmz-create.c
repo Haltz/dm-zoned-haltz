@@ -1,7 +1,7 @@
 #include "dmz.h"
 
 #define DEVICE_NAME "dm"
-#define DEVICE_PATH "/dev/nullb0"
+#define DEVICE_PATH "/dev/sdb"
 
 static unsigned int major = 255;
 
@@ -173,12 +173,10 @@ void dev_destroy(struct dmz_target *dmz) {
 int dmz_ctr(struct dmz_target *dmz) {
 	int ret;
 
-	dmz->target_bdev = blkdev_get_by_path(DEVICE_PATH, FMODE_READ | FMODE_WRITE, NULL);
+	dmz->target_bdev = blkdev_get_by_path(DEVICE_PATH, FMODE_READ | FMODE_WRITE, "dm-zoned-haltz");
 	if (IS_ERR(dmz->target_bdev)) {
 		goto target_bdev;
 	}
-
-	refcount_set(&dmz->ref, 1);
 
 	dmz->dev = dev_create(dmz);
 	if (!dmz->dev) {
@@ -228,6 +226,8 @@ static int __init dmz_init(void) {
 	if (!dmz_tgt) {
 		goto dmz_alloc;
 	}
+
+	refcount_set(&dmz_tgt->ref, 1);
 
 	r = dmz_ctr(dmz_tgt);
 	if (r) {

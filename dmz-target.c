@@ -88,12 +88,7 @@ unsigned long dmz_get_map(struct dmz_metadata *zmd, unsigned long lba) {
 // map logic to physical. if unmapped, return 0xffff ffff ffff ffff(default reserved blk_id representing invalid)
 unsigned long dmz_l2p(struct dmz_target *dmz, sector_t lba) {
 	struct dmz_metadata *zmd = dmz->zmd;
-
-	// spin_lock_irqsave(&zmd->maptable_lock, flags);
-
 	unsigned long pba = dmz_get_map(zmd, lba);
-
-	// pr_info("l2p: %llx, %llx\n", lba, pba);
 
 	if (pba >= (zmd->nr_blocks)) {
 		pba = ~0;
@@ -106,8 +101,6 @@ void dmz_bio_endio(struct bio *bio, blk_status_t status) {
 	if (status != BLK_STS_OK)
 		bio->bi_status = status;
 
-	pr_info("Endio Status: %d\n", bio->bi_status);
-
 	bio_endio(bio);
 }
 
@@ -118,7 +111,6 @@ void dmz_update_map(struct dmz_target *dmz, unsigned long lba, unsigned long pba
 	int offset = lba % zmd->zone_nr_blocks;
 
 	struct dmz_zone *cur_zone = &zmd->zone_start[index];
-	// spin_lock_irqsave(&zmd->maptable_lock, flags);
 	unsigned long old_pba = cur_zone->mt[offset].block_id;
 	cur_zone->mt[offset].block_id = pba;
 
@@ -151,7 +143,6 @@ void dmz_read_clone_endio(struct bio *clone) {
 	struct dmz_clone_bioctx *clone_bioctx = clone->bi_private;
 	struct dmz_bioctx *bioctx = clone_bioctx->bioctx;
 
-	bio_put(clone);
 	refcount_dec(&bioctx->ref);
 
 	if (status != BLK_STS_OK) {
@@ -164,7 +155,7 @@ void dmz_read_clone_endio(struct bio *clone) {
 	}
 
 	kfree(clone_bioctx);
-	kfree(clone);
+	bio_put(clone);
 }
 
 int dmz_submit_read_bio(struct dmz_target *dmz, struct bio *bio, struct dmz_bioctx *bioctx) {
@@ -172,13 +163,13 @@ int dmz_submit_read_bio(struct dmz_target *dmz, struct bio *bio, struct dmz_bioc
 	int nr_blocks = bio_sectors(bio) >> DMZ_BLOCK_SECTORS_SHIFT;
 	struct block_device *tgtdev = dmz->target_bdev;
 
-	unsigned long lba = bio->bi_iter.bi_size >> DMZ_BLOCK_SECTORS_SHIFT;
+	unsigned long lba = bio->bi_iter.bi_sector >> DMZ_BLOCK_SECTORS_SHIFT;
 
 	while (nr_blocks) {
 		int ret = 0;
 		unsigned long pba = dmz_l2p(dmz, lba);
 
-		struct bio *clone_bio = bio_clone_fast(bio, GFP_KERNEL, &dmz->bio_set);
+		struct bio *clone_bio = bio_clone_fast(bio, GFP_KERNEL, NULL);
 		if (!clone_bio) {
 			ret = -ENOMEM;
 			goto out;
@@ -191,7 +182,7 @@ int dmz_submit_read_bio(struct dmz_target *dmz, struct bio *bio, struct dmz_bioc
 			goto out;
 		}
 
-		bio_set_dev(bio, tgtdev);
+		bio_set_dev(clone_bio, tgtdev);
 
 		clone_bioctx->bioctx = bioctx;
 		clone_bioctx->dmz = dmz;
@@ -217,6 +208,8 @@ int dmz_submit_read_bio(struct dmz_target *dmz, struct bio *bio, struct dmz_bioc
 		nr_blocks--;
 	}
 
+	return ret;
+
 /** Error Handling **/
 out:
 	return ret;
@@ -229,7 +222,6 @@ void dmz_write_clone_endio(struct bio *clone) {
 	struct dmz_metadata *zmd = dmz->zmd;
 	struct dmz_bioctx *bioctx = clone_bioctx->bioctx;
 
-	bio_put(clone);
 	refcount_dec(&bioctx->ref);
 
 	// if write op succeeds, update mapping. (validate wp and invalidate old_pba if old_pba exists.)
@@ -253,13 +245,12 @@ void dmz_write_clone_endio(struct bio *clone) {
 	}
 
 	kfree(clone_bioctx);
-	kfree(clone);
+	bio_put(clone);
 }
 
 int dmz_submit_write_bio(struct dmz_target *dmz, struct bio *bio, struct dmz_bioctx *bioctx) {
 	int ret = 0;
 	int nr_sectors = bio_sectors(bio), nr_blocks = bio_sectors(bio) >> DMZ_BLOCK_SECTORS_SHIFT;
-	struct block_device *tgtdev = dmz->target_bdev;
 	struct dmz_metadata *zmd = dmz->zmd;
 	struct dmz_zone *zone = zmd->zone_start;
 	unsigned long flags;
@@ -286,14 +277,13 @@ int dmz_submit_write_bio(struct dmz_target *dmz, struct bio *bio, struct dmz_bio
 			goto out;
 		}
 
-		int blk_num = zmd->zone_nr_blocks - zone[rzone].wp;
+		int blk_num = min((int)(zmd->zone_nr_blocks - zone[rzone].wp), nr_blocks);
 
-		nr_blocks -= blk_num;
 		pba = zone[rzone].wp + (rzone << DMZ_ZONE_NR_BLOCKS_SHIFT);
 		zone[rzone].wp += blk_num;
 		spin_unlock_irqrestore(&zmd->meta_lock, flags);
 
-		struct bio *clone_bio = bio_clone_fast(bio, GFP_KERNEL, &dmz->bio_set);
+		struct bio *clone_bio = bio_clone_fast(bio, GFP_KERNEL, NULL);
 		if (!clone_bio) {
 			ret = -ENOMEM;
 			goto out;
@@ -306,7 +296,7 @@ int dmz_submit_write_bio(struct dmz_target *dmz, struct bio *bio, struct dmz_bio
 			goto out;
 		}
 
-		bio_set_dev(bio, tgtdev);
+		bio_set_dev(clone_bio, zmd->target_bdev);
 
 		clone_bioctx->bioctx = bioctx;
 		clone_bioctx->dmz = dmz;
@@ -325,7 +315,10 @@ int dmz_submit_write_bio(struct dmz_target *dmz, struct bio *bio, struct dmz_bio
 		bio_advance(bio, clone_bio->bi_iter.bi_size);
 
 		lba += blk_num;
+		nr_blocks -= blk_num;
 	}
+
+	return 0;
 
 /** Not supported yet. **/
 not_aligned:

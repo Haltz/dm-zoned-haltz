@@ -171,6 +171,7 @@ struct dmz_target {
 	refcount_t ref;
 };
 
+/** make sure size is power of 2 in order to fit one block size. **/
 struct dmz_zone {
 	unsigned int wp; // 4
 	unsigned int weight; // 4
@@ -192,8 +193,6 @@ struct dmz_zone {
 
 	// lock for pba_alloc and update_map
 	spinlock_t lock; // 4
-
-	// make sure size is power of 2
 };
 
 int dmz_ctr_reclaim(void);

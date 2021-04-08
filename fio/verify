@@ -1,0 +1,13 @@
+[global]
+filename=/dev/dm-0
+rw=write
+bs=4k
+direct=1
+ioengine=libaio
+iodepth=32
+verify=crc32c
+group_reporting
+size=256m
+
+[wv]
+offset=0

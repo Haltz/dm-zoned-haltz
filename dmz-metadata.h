@@ -1,5 +1,5 @@
-#ifndef DMZ_METADATA_H
-#define DMZ_METADATA_H
+#ifndef _DMZ_METADATA_H_
+#define _DMZ_METADATA_H_
 
 #include "dmz.h"
 

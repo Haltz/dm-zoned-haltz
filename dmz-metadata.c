@@ -86,8 +86,6 @@ struct dmz_zone *dmz_load_zones(struct dmz_metadata *zmd, unsigned long *bitmap)
 			cur_zone->mt[j].block_id = ~0;
 			cur_zone->reverse_mt[j].block_id = ~0;
 		}
-
-		spin_lock_init(&cur_zone->lock);
 	}
 
 	int ret = blkdev_report_zones(zmd->target_bdev, 0, BLK_ALL_ZONES, dmz_init_zones_type, zone_start);
@@ -252,6 +250,9 @@ int dmz_load_metadata(struct dmz_metadata *zmd) {
 	zone_start->wp = zmd->useable_start;
 	pr_info("Zones succeed.\n");
 
+	if (dmz_locks_init(zmd))
+		goto locks;
+
 	/** There is no need to support flush right now. **/
 	// if (!(~zmd->sblk->magic)) {
 	// 	pr_info("Start Initlization.\n");
@@ -267,6 +268,8 @@ int dmz_load_metadata(struct dmz_metadata *zmd) {
 	// In such case, I allocate small memory for each zone to split mapping table, which reduce pressure for memory and still easy to update mapping table.
 	return ret;
 
+locks:
+	dmz_unload_zones(zmd);
 zones:
 	dmz_unload_bitmap(zmd);
 bitmap:
@@ -278,6 +281,8 @@ void dmz_unload_metadata(struct dmz_metadata *zmd) {
 	dmz_unload_bitmap(zmd);
 
 	dmz_unload_zones(zmd);
+
+	dmz_locks_cleanup(zmd);
 }
 
 int dmz_ctr_metadata(struct dmz_target *dmz) {
@@ -321,11 +326,7 @@ int dmz_ctr_metadata(struct dmz_target *dmz) {
 	}
 
 	dmz->zmd = zmd;
-
-	spin_lock_init(&zmd->meta_lock);
-	spin_lock_init(&zmd->maptable_lock);
-	spin_lock_init(&zmd->bitmap_lock);
-
+	
 	return 0;
 
 load_meta:

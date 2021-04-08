@@ -53,7 +53,7 @@ void dmz_reclaim_read_bio_endio(struct bio *bio) {
 	bio_put(bio);
 }
 
-void* dmz_reclaim_read_block(struct dmz_target *dmz, unsigned long pba) {
+void *dmz_reclaim_read_block(struct dmz_target *dmz, unsigned long pba) {
 	struct dmz_metadata *zmd = dmz->zmd;
 	struct page *page = alloc_page(GFP_KERNEL);
 	if (!page)
@@ -87,7 +87,7 @@ void* dmz_reclaim_read_block(struct dmz_target *dmz, unsigned long pba) {
 	}
 	unlock_page(page);
 
-	return (void*)buffer;
+	return (void *)buffer;
 
 read_err:
 	unlock_page(page);
@@ -144,12 +144,9 @@ unsigned long dmz_reclaim_pba_alloc(struct dmz_target *dmz, int reclaim_zone) {
 	for (int i = 0; i < zmd->nr_zones; i++) {
 		if (i == reclaim_zone)
 			continue;
-		// spin_lock_irqsave(&zmd->meta_lock, flags);
 		if (zmd->zone_start[i].wp < zmd->zone_nr_blocks) {
-			// spin_unlock_irqrestore(&zmd->meta_lock, flags);
 			return i * zmd->zone_nr_blocks + zmd->zone_start[i].wp;
 		}
-		// spin_unlock_irqrestore(&zmd->meta_lock, flags);
 	}
 
 	return ~0;
@@ -213,6 +210,8 @@ int dmz_reclaim_zone(struct dmz_target *dmz, int zone) {
 	struct dmz_zone *cur_zone = &zmd->zone_start[zone];
 	int ret = 0;
 
+	dmz_lock_zone(zmd, zone);
+
 	unsigned long *bitmap = cur_zone->bitmap;
 
 	// for (unsigned long offset = 0; offset < zmd->zone_nr_blocks; offset++) {
@@ -249,8 +248,10 @@ int dmz_reclaim_zone(struct dmz_target *dmz, int zone) {
 	if (ret)
 		pr_err("blkdev_zone_mgmt errcode %d\n", ret);
 
+	dmz_unlock_zone(zmd, zone);
 	return 0;
 
 reclaim_bio_err:
+	dmz_unlock_zone(zmd, zone);
 	return -3;
 }

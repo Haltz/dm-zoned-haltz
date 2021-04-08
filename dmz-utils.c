@@ -1,5 +1,8 @@
-#include "dmz.h"
+#include "dmz-utils.h"
 #include <linux/mm.h>
+
+unsigned long meta_flags;
+unsigned long* zone_lock_flags;
 
 // TODO inc_wp should trigger recliam process under proper circumustance.
 int dmz_inc_wp(struct dmz_metadata *zmd, struct dmz_zone *zone) {
@@ -98,9 +101,8 @@ repeat_try:
 		wp_after_flush[i] = zone[i].wp;
 
 	for (int i = 0; i < zmd->nr_zones; i++) {
-		if (dmz_determine_target_zone(zmd, nr_zone_mt_need_blocks, wp_after_flush, mapping_target_zones, i) 
-		|| dmz_determine_target_zone(zmd, nr_zone_mt_need_blocks, wp_after_flush, rmapping_target_zones, i) 
-		|| dmz_determine_target_zone(zmd, nr_zone_bitmap_need_blocks, wp_after_flush, bitmap_target_zones, i)) {
+		if (dmz_determine_target_zone(zmd, nr_zone_mt_need_blocks, wp_after_flush, mapping_target_zones, i) || dmz_determine_target_zone(zmd, nr_zone_mt_need_blocks, wp_after_flush, rmapping_target_zones, i) ||
+		    dmz_determine_target_zone(zmd, nr_zone_bitmap_need_blocks, wp_after_flush, bitmap_target_zones, i)) {
 			goto again;
 		}
 	}
@@ -219,4 +221,60 @@ int dmz_flush(struct dmz_target *dmz) {
 	// }
 
 	return 0;
+}
+
+int dmz_locks_init(struct dmz_metadata *zmd) {
+	spin_lock_init(&zmd->meta_lock);
+	spin_lock_init(&zmd->bitmap_lock);
+	spin_lock_init(&zmd->maptable_lock);
+
+	struct dmz_zone *zone = zmd->zone_start;
+	for (int i = 0; i < zmd->nr_zones; i++) {
+		spin_lock_init(&zone[i].lock);
+	}
+
+	zone_lock_flags = kcalloc(zmd->nr_zones, sizeof(unsigned long), GFP_KERNEL);
+	if (!zone_lock_flags)
+		return -1;
+
+	return 0;
+}
+
+void dmz_locks_cleanup(struct dmz_metadata *zmd) {
+	if (zone_lock_flags)
+		kfree(zone_lock_flags);
+}
+
+int dmz_lock_metadata(struct dmz_metadata *zmd) {
+	if (spin_is_locked(&zmd->meta_lock))
+		return -1;
+
+	spin_lock_irqsave(&zmd->meta_lock, meta_flags);
+
+	return 0;
+}
+
+void dmz_unlock_metadata(struct dmz_metadata *zmd) {
+	if (!spin_is_locked(&zmd->meta_lock))
+		return;
+
+	spin_unlock_irqrestore(&zmd->meta_lock, meta_flags);
+}
+
+int dmz_lock_zone(struct dmz_metadata *zmd, int idx) {
+	struct dmz_zone *zone = zmd->zone_start;
+	if (spin_is_locked(&zone[idx].lock))
+		return -1;
+
+	spin_lock_irqsave(&zone[idx].lock, zone_lock_flags[idx]);
+
+	return 0;
+}
+
+void dmz_unlock_zone(struct dmz_metadata *zmd, int idx) {
+	struct dmz_zone *zone = zmd->zone_start;
+	if (!spin_is_locked(&zone[idx].lock))
+		return;
+
+	spin_unlock_irqrestore(&zone[idx].lock, zone_lock_flags[idx]);
 }

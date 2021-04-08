@@ -8,8 +8,8 @@
  * @copyright Copyright (c) 2020
  * 
  */
-#ifndef DMZ_H
-#define DMZ_H
+#ifndef _DMZ_H_
+#define _DMZ_H_
 
 #include <linux/types.h>
 #include <linux/blkdev.h>
@@ -204,10 +204,10 @@ void dmz_update_map(struct dmz_target *dmz, unsigned long lba, unsigned long pba
 int dmz_pba_alloc(struct dmz_target *dmz);
 unsigned long dmz_reclaim_pba_alloc(struct dmz_target *dmz, int reclaim_zone);
 
-int dmz_flush(struct dmz_target *dmz);
 int dmz_map(struct dmz_target *dmz, struct bio *bio);
 
 /** functions defined in dmz-metadata.h depends on structs defined above. **/
 #include "dmz-metadata.h"
+#include "dmz-utils.h"
 
 #endif

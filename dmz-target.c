@@ -139,6 +139,7 @@ void dmz_update_map(struct dmz_target *dmz, unsigned long lba, unsigned long pba
 }
 
 void dmz_submit_clone_bio(struct dmz_metadata *zmd, struct bio *clone, int idx) {
+	// dmz_start_io is called in pba_alloc, otherwise it should be called here.
 	submit_bio(clone);
 }
 
@@ -155,7 +156,7 @@ void dmz_read_clone_endio(struct bio *clone) {
 	struct dmz_target *dmz = clone_bioctx->dmz;
 	struct dmz_metadata *zmd = dmz->zmd;
 	struct dmz_bioctx *bioctx = clone_bioctx->bioctx;
-	unsigned idx = clone->bi_iter.bi_sector >> DMZ_BLOCK_SECTORS_SHIFT;
+	unsigned idx = clone->bi_iter.bi_sector >> DMZ_BLOCK_SECTORS_SHIFT >> DMZ_ZONE_NR_BLOCKS_SHIFT;
 
 	refcount_dec(&bioctx->ref);
 
@@ -320,6 +321,7 @@ int dmz_submit_write_bio(struct dmz_target *dmz, struct bio *bio, struct dmz_bio
 
 		refcount_inc(&bioctx->ref);
 
+		pr_info("start: %ld 0x%lx, size: %d 0x%x", pba, pba, blk_num, blk_num);
 		dmz_submit_clone_bio(zmd, clone_bio, pba >> DMZ_ZONE_NR_BLOCKS_SHIFT);
 
 		bio_advance(bio, clone_bio->bi_iter.bi_size);

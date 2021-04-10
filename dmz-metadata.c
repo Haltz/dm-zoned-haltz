@@ -229,8 +229,7 @@ int dmz_load_metadata(struct dmz_metadata *zmd) {
 	zmd->nr_map_blocks = zmd->nr_blocks >> 9;
 	zmd->nr_bitmap_blocks = zmd->nr_blocks >> 15;
 
-	// Temporary set 256.
-	zmd->useable_start = 1;
+	zmd->useable_start = 0;
 
 	unsigned long *bitmap_ptr = dmz_load_bitmap(zmd);
 	if (!bitmap_ptr) {

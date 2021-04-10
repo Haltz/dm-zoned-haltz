@@ -4,22 +4,14 @@ rw=randwrite
 bs=256k
 direct=1
 ioengine=libaio
-iodepth=1
-verify=crc32c
+iodepth=32
 group_reporting
-size=1m
+size=256m
 
 [wv]
 offset=0
+numjobs=10
 
 [wv]
-offset=256m
-
-[wv]
-offset=512m
-
-[wv]
-offset=768m
-
-[wv]
-offset=1024m
+offset=4096m
+numjobs=10

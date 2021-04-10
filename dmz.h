@@ -196,6 +196,8 @@ struct dmz_zone {
 
 	// lock for io
 	struct mutex io_lock; // 32
+	// lock for mapping and bitmap
+	struct mutex map_lock; // 32
 };
 
 int dmz_ctr_reclaim(void);

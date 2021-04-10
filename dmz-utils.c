@@ -232,6 +232,7 @@ int dmz_locks_init(struct dmz_metadata *zmd) {
 	for (int i = 0; i < zmd->nr_zones; i++) {
 		spin_lock_init(&zone[i].lock);
 		mutex_init(&zone[i].io_lock);
+		mutex_init(&zone[i].map_lock);
 	}
 
 	zone_lock_flags = kcalloc(zmd->nr_zones, sizeof(unsigned long), GFP_KERNEL);
@@ -283,11 +284,13 @@ void dmz_unlock_zone(struct dmz_metadata *zmd, int idx) {
 void dmz_start_io(struct dmz_metadata *zmd, int idx) {
 	struct dmz_zone *zone = zmd->zone_start;
 	mutex_lock(&zone[idx].io_lock);
+	pr_info("Zone %d IO LOCKED.", idx);
 }
 
 void dmz_complete_io(struct dmz_metadata *zmd, int idx) {
 	struct dmz_zone *zone = zmd->zone_start;
 	mutex_unlock(&zone[idx].io_lock);
+	pr_info("Zone %d IO UNLOCKED.", idx);
 }
 
 int dmz_is_on_io(struct dmz_metadata *zmd, int idx) {
@@ -313,4 +316,14 @@ void dmz_unlock_reclaim(struct dmz_metadata *zmd) {
 		return;
 
 	mutex_unlock(&zmd->reclaim_lock);
+}
+
+void dmz_lock_map(struct dmz_metadata *zmd, int idx) {
+	struct dmz_zone *zone = zmd->zone_start;
+	mutex_lock(&zone[idx].map_lock);
+}
+
+void dmz_unlock_map(struct dmz_metadata *zmd, int idx) {
+	struct dmz_zone *zone = zmd->zone_start;
+	mutex_unlock(&zone[idx].map_lock);
 }

@@ -1,17 +1,16 @@
 [global]
 filename=/dev/dm-0
-rw=randwrite
-bs=256k
+rw=write
+bs=4k
 direct=1
 ioengine=libaio
 iodepth=32
 group_reporting
-size=256m
+size=1024m
+verify=crc32c
 
 [wv]
 offset=0
-numjobs=10
 
 [wv]
 offset=4096m
-numjobs=10

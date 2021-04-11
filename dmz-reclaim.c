@@ -69,18 +69,15 @@ void *dmz_reclaim_read_block(struct dmz_target *dmz, unsigned long pba) {
 	// Here PAGE_SIZE = DMZ_BLOCK_SIZE = 4KB
 	bio_add_page(rbio, page, PAGE_SIZE, 0);
 	bio_set_op_attrs(rbio, REQ_OP_READ, 0);
-	int err = lock_page_killable(page);
-	if (unlikely(err)) {
-		pr_err("Lock failed before read.\n");
-	}
+	lock_page(page);
+
 	ClearPageUptodate(page);
 	rbio->bi_end_io = dmz_reclaim_read_bio_endio;
 
 	submit_bio(rbio);
-	err = lock_page_killable(page);
-	if (unlikely(err)) {
-		pr_err("Lock failed after read.\n");
-	}
+
+	lock_page(page);
+
 	if (!PageUptodate(page)) {
 		pr_err("Read page err.\n");
 		goto read_err;
@@ -169,7 +166,7 @@ int dmz_make_reclaim_bio(struct dmz_target *dmz, unsigned long lba) {
 	struct dmz_metadata *zmd = dmz->zmd;
 	int ret = 0;
 
-	int index = lba >> DMZ_ZONE_NR_BLOCKS_SHIFT, offset = lba % zmd->zone_nr_blocks;
+	int index = lba >> DMZ_ZONE_NR_BLOCKS_SHIFT, offset = lba & DMZ_ZONE_NR_BLOCKS_MASK;
 	// pr_info("%x, %x, %x\n", lba, index, offset);
 	unsigned long pba = zmd->zone_start[index].mt[offset].block_id;
 
@@ -185,7 +182,7 @@ int dmz_make_reclaim_bio(struct dmz_target *dmz, unsigned long lba) {
 	}
 	ret = dmz_reclaim_write_block(dmz, new_pba, buffer);
 	if (!ret) {
-		zmd->zone_start[new_pba >> DMZ_BLOCK_SHIFT].wp += 1;
+		zmd->zone_start[new_pba >> DMZ_ZONE_NR_BLOCKS_SHIFT].wp += 1;
 	}
 
 	if (!ret) {
@@ -213,7 +210,6 @@ int dmz_reclaim_zone(struct dmz_target *dmz, int zone) {
 
 	// make sure only one zone is under reclaim process.
 	dmz_lock_reclaim(zmd);
-	dmz_start_io(zmd, zone);
 
 	unsigned long *bitmap = cur_zone->bitmap;
 
@@ -227,11 +223,10 @@ int dmz_reclaim_zone(struct dmz_target *dmz, int zone) {
 		unsigned int size = sizeof(unsigned long) << 3;
 		int shift = ((offset % size) + 8 > size) ? size - 1 - (offset % size) : 7;
 		if (valid_bitmap & (0x1 << shift)) {
-			unsigned long lba = dmz_p2l(zmd, zone * zmd->zone_nr_blocks + offset);
+			unsigned long lba = dmz_p2l(zmd, (zone << DMZ_ZONE_NR_BLOCKS_SHIFT) + offset);
 			if (dmz_is_default_pba(lba)) {
 				// Here means that it is blk stores mt or rmt or bitmap. I have not update bitmap for them.
 				// Just ignore them because we have to flush them again before unload device.
-				// TODO update bitmap when flushing these metadata blocks.(They don't need to be valid.)
 				continue;
 			}
 
@@ -245,7 +240,7 @@ int dmz_reclaim_zone(struct dmz_target *dmz, int zone) {
 	cur_zone->wp = 0;
 
 	if (DMZ_IS_SEQ(cur_zone)) {
-		ret = blkdev_zone_mgmt(zmd->target_bdev, REQ_OP_ZONE_RESET, zmd->zone_nr_sectors * zone, zmd->zone_nr_sectors, GFP_NOIO);
+		ret = blkdev_zone_mgmt(zmd->target_bdev, REQ_OP_ZONE_RESET, zmd->zone_nr_sectors * zone, zmd->zone_nr_sectors, GFP_KERNEL);
 	} else {
 	}
 
@@ -255,7 +250,6 @@ int dmz_reclaim_zone(struct dmz_target *dmz, int zone) {
 	}
 
 reclaim_bio_err:
-	dmz_complete_io(zmd, zone);
 	dmz_unlock_reclaim(zmd);
 	return ret;
 }

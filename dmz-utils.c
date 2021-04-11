@@ -284,13 +284,13 @@ void dmz_unlock_zone(struct dmz_metadata *zmd, int idx) {
 void dmz_start_io(struct dmz_metadata *zmd, int idx) {
 	struct dmz_zone *zone = zmd->zone_start;
 	mutex_lock(&zone[idx].io_lock);
-	// pr_info("Zone %d IO LOCKED.", idx);
+	// pr_info("<Zone %d IO Locked>.", idx);
 }
 
 void dmz_complete_io(struct dmz_metadata *zmd, int idx) {
 	struct dmz_zone *zone = zmd->zone_start;
 	mutex_unlock(&zone[idx].io_lock);
-	// pr_info("Zone %d IO UNLOCKED.", idx);
+	// pr_info("<Zone %d IO Unlocked>.", idx);
 }
 
 int dmz_is_on_io(struct dmz_metadata *zmd, int idx) {
@@ -329,23 +329,41 @@ void dmz_unlock_map(struct dmz_metadata *zmd, int idx) {
 }
 
 int dmz_open_zone(struct dmz_metadata *zmd, int idx) {
-	int ret = blkdev_zone_mgmt(zmd->target_bdev, REQ_OP_ZONE_OPEN, idx << DMZ_ZONE_NR_BLOCKS_SHIFT, zmd->zone_nr_sectors, GFP_NOIO);
+	struct dmz_zone *zone = zmd->zone_start;
+	int ret = 0;
+	if (DMZ_IS_SEQ(&zone[idx]))
+		ret = blkdev_zone_mgmt(zmd->target_bdev, REQ_OP_ZONE_OPEN, idx << (DMZ_ZONE_NR_BLOCKS_SHIFT + DMZ_BLOCK_SECTORS_SHIFT), zmd->zone_nr_sectors, GFP_KERNEL);
 	if (ret)
 		pr_err("Open Zone %d Failed.", idx);
 	return ret;
 }
 
 int dmz_close_zone(struct dmz_metadata *zmd, int idx) {
-	int ret = blkdev_zone_mgmt(zmd->target_bdev, REQ_OP_ZONE_CLOSE, idx << DMZ_ZONE_NR_BLOCKS_SHIFT, zmd->zone_nr_sectors, GFP_NOIO);
+	struct dmz_zone *zone = zmd->zone_start;
+	int ret = 0;
+	if (DMZ_IS_SEQ(&zone[idx]))
+		ret = blkdev_zone_mgmt(zmd->target_bdev, REQ_OP_ZONE_CLOSE, idx << (DMZ_ZONE_NR_BLOCKS_SHIFT + DMZ_BLOCK_SECTORS_SHIFT), zmd->zone_nr_sectors, GFP_KERNEL);
 	if (ret)
 		pr_err("Close Zone %d Failed.", idx);
 	return ret;
 }
 
 int dmz_finish_zone(struct dmz_metadata *zmd, int idx) {
-	return blkdev_zone_mgmt(zmd->target_bdev, REQ_OP_ZONE_FINISH, idx << DMZ_ZONE_NR_BLOCKS_SHIFT, zmd->zone_nr_sectors, GFP_NOIO);
+	struct dmz_zone *zone = zmd->zone_start;
+	int ret = 0;
+	if (DMZ_IS_SEQ(&zone[idx]))
+		ret = blkdev_zone_mgmt(zmd->target_bdev, REQ_OP_ZONE_FINISH, idx << (DMZ_ZONE_NR_BLOCKS_SHIFT + DMZ_BLOCK_SECTORS_SHIFT), zmd->zone_nr_sectors, GFP_KERNEL);
+	if (ret)
+		pr_err("Finish Zone %d Failed.", idx);
+	return ret;
 }
 
-int dmz_reset_all_zones(struct dmz_metadata *zmd) {
-	return blkdev_zone_mgmt(zmd->target_bdev, REQ_OP_ZONE_FINISH, 0, zmd->nr_zones << DMZ_ZONE_NR_BLOCKS_SHIFT, GFP_NOIO);
+int dmz_reset_zone(struct dmz_metadata *zmd, int idx) {
+	struct dmz_zone *zone = zmd->zone_start;
+	int ret = 0;
+	if (DMZ_IS_SEQ(&zone[idx]))
+		ret = blkdev_zone_mgmt(zmd->target_bdev, REQ_OP_ZONE_RESET, idx << (DMZ_ZONE_NR_BLOCKS_SHIFT + DMZ_BLOCK_SECTORS_SHIFT), zmd->zone_nr_sectors, GFP_KERNEL);
+	if (ret)
+		pr_err("Reset Zone %d Failed. Err: %d", idx, ret);
+	return ret;
 }

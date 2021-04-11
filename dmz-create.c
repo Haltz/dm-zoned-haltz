@@ -1,7 +1,7 @@
 #include "dmz.h"
 
 #define DEVICE_NAME "dm"
-#define DEVICE_PATH "/dev/sdb"
+#define DEVICE_PATH "/dev/nullb0"
 
 static unsigned int major = 255;
 
@@ -29,7 +29,6 @@ static int queue_rw_rq(struct dmz_target *dmz, struct request *req) {
 	int ret = 0;
 
 	while (next) {
-		pr_info("H2: op %d\n", bio_op(next));
 		if (dmz_map(dmz, next))
 			ret = -1;
 		next = next->bi_next;
@@ -42,8 +41,6 @@ static blk_status_t dmz_queue_rq(struct blk_mq_hw_ctx *hctx, const struct blk_mq
 	struct dmz_target *dmz = hctx->queue->queuedata;
 	struct request *req = bd->rq;
 	int ret = BLK_STS_OK;
-
-	pr_info("H3\n");
 
 	blk_mq_start_request(req);
 

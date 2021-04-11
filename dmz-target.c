@@ -176,8 +176,9 @@ void dmz_submit_clone_bio(struct dmz_metadata *zmd, struct bio *clone, int idx, 
 
 	// dmz_open_zone(zmd, idx);
 
-	if (bio_op(clone) == REQ_OP_READ)
-		dmz_start_io(zmd, idx);
+	// This part of code will wait forever. Don't know why.
+	/** if (bio_op(clone) == REQ_OP_READ)
+	 	dmz_start_io(zmd, idx); **/
 
 	dmz_bio_submit_on(ctx);
 	if (!remain_nr) {
@@ -277,6 +278,7 @@ int dmz_submit_read_bio(struct dmz_target *dmz, struct bio *bio, struct dmz_bioc
 
 		refcount_inc(&bioctx->ref);
 
+		// dmz_start_io(zmd, pba >> DMZ_ZONE_NR_BLOCKS_SHIFT);
 		dmz_submit_clone_bio(zmd, clone_bio, pba >> DMZ_ZONE_NR_BLOCKS_SHIFT, nr_blocks - 1);
 		bio_advance(bio, clone_bio->bi_iter.bi_size);
 
@@ -314,7 +316,7 @@ void dmz_write_clone_endio(struct bio *clone) {
 	int index = clone_bioctx->new_pba >> DMZ_ZONE_NR_BLOCKS_SHIFT;
 	int offset = clone_bioctx->new_pba & DMZ_ZONE_NR_BLOCKS_MASK;
 
-	// 50% start reclaim
+	// When zone is full start reclaim
 	if (offset + nr_blocks == zmd->zone_nr_blocks) {
 		dmz_reclaim_zone(dmz, index);
 	}

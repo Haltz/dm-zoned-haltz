@@ -324,8 +324,13 @@ int dmz_ctr_metadata(struct dmz_target *dmz) {
 		goto load_meta;
 	}
 
+	// Reset Zones.
+	for (int i = 0; i < zmd->nr_zones; i++) {
+		dmz_reset_zone(zmd, i);
+	}
+
 	dmz->zmd = zmd;
-	
+
 	return 0;
 
 load_meta:

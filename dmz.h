@@ -73,8 +73,8 @@
 // default pba which value is 0x ffff ffff ffff ffff indicates that lba is not wrote yet
 #define dmz_is_default_pba(pba) (!(~pba))
 
-#define DMZ_IS_SEQ(zone) (zone->type == DMZ_ZONE_SEQ)
-#define DMZ_IS_RND(zone) (zone->type == DMZ_ZONE_RND)
+#define DMZ_IS_SEQ(zone) ((zone)->type == DMZ_ZONE_SEQ)
+#define DMZ_IS_RND(zone) ((zone)->type == DMZ_ZONE_RND)
 
 #define DMZ_MIN_BIOS 8192
 

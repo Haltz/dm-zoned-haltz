@@ -71,21 +71,25 @@ struct dmz_zone *dmz_load_zones(struct dmz_metadata *zmd, unsigned long *bitmap)
 		struct dmz_zone *cur_zone = zone_start + i;
 		cur_zone->weight = 0;
 		cur_zone->wp = 0;
-		cur_zone->bitmap = bitmap + (zmd->zone_nr_blocks >> 6) * i;
+		cur_zone->bitmap = (unsigned long *)((unsigned long)bitmap + (i << (DMZ_ZONE_NR_BLOCKS_SHIFT - 3)));
 		cur_zone->mt = kzalloc(zmd->zone_nr_blocks * sizeof(struct dmz_map), GFP_KERNEL);
 		if (!cur_zone->mt) {
 			pr_err("mt err.\n");
-			goto mt;
+			goto alloc;
 		}
 		cur_zone->reverse_mt = kzalloc(zmd->zone_nr_blocks * sizeof(struct dmz_map), GFP_KERNEL);
 		if (!cur_zone->reverse_mt) {
 			pr_err("reverse_mt err.\n");
-			goto mt;
+			goto alloc;
 		}
 		for (int j = 0; j < zmd->zone_nr_blocks; j++) {
 			cur_zone->mt[j].block_id = ~0;
 			cur_zone->reverse_mt[j].block_id = ~0;
 		}
+
+		cur_zone->write_wq = alloc_workqueue("dmz-zone%d-wq", WQ_MEM_RECLAIM | WQ_UNBOUND, 0, i);
+		if (!cur_zone->write_wq)
+			goto alloc;
 	}
 
 	int ret = blkdev_report_zones(zmd->target_bdev, 0, BLK_ALL_ZONES, dmz_init_zones_type, zone_start);
@@ -96,7 +100,7 @@ struct dmz_zone *dmz_load_zones(struct dmz_metadata *zmd, unsigned long *bitmap)
 
 	return zone_start;
 
-mt:
+alloc:
 	dmz_unload_zones(zmd);
 out:
 	return NULL;
@@ -122,6 +126,9 @@ void dmz_unload_zones(struct dmz_metadata *zmd) {
 		if (cur->reverse_mt) {
 			kfree(cur->reverse_mt);
 		}
+
+		if (cur->write_wq)
+			destroy_workqueue(cur->write_wq);
 	}
 
 	kfree(zone);
@@ -131,7 +138,6 @@ void dmz_unload_zones(struct dmz_metadata *zmd) {
 unsigned long *dmz_load_bitmap(struct dmz_metadata *zmd) {
 	// First >>3 is sector to block, second >>3 is bit to byte
 	zmd->nr_bitmap_blocks = zmd->capacity >> 3 >> 3 >> DMZ_BLOCK_SHIFT;
-	pr_info("[dmz-load]: bitmap loading, %ld bitmap blocks in total.\n", zmd->nr_bitmap_blocks);
 	unsigned long *bitmap = bitmap_zalloc(zmd->capacity >> 3, GFP_KERNEL);
 	if (!bitmap) {
 		return NULL;
@@ -324,6 +330,10 @@ int dmz_ctr_metadata(struct dmz_target *dmz) {
 		goto load_meta;
 	}
 
+	zmd->reclaim_wq = alloc_workqueue("dmz-reclaim-wq", WQ_MEM_RECLAIM | WQ_UNBOUND, 0);
+	if (!zmd->reclaim_wq)
+		goto reclaim_init;
+
 	// Reset Zones.
 	for (int i = 0; i < zmd->nr_zones; i++) {
 		dmz_reset_zone(zmd, i);
@@ -333,6 +343,8 @@ int dmz_ctr_metadata(struct dmz_target *dmz) {
 
 	return 0;
 
+reclaim_init:
+	dmz_unload_metadata(zmd);
 load_meta:
 	kfree(zmd);
 alloc:

@@ -248,18 +248,12 @@ void dmz_locks_cleanup(struct dmz_metadata *zmd) {
 }
 
 int dmz_lock_metadata(struct dmz_metadata *zmd) {
-	if (spin_is_locked(&zmd->meta_lock))
-		return -1;
-
 	spin_lock_irqsave(&zmd->meta_lock, meta_flags);
 
 	return 0;
 }
 
 void dmz_unlock_metadata(struct dmz_metadata *zmd) {
-	if (!spin_is_locked(&zmd->meta_lock))
-		return;
-
 	spin_unlock_irqrestore(&zmd->meta_lock, meta_flags);
 }
 
@@ -303,18 +297,11 @@ int dmz_is_on_io(struct dmz_metadata *zmd, int idx) {
 }
 
 int dmz_lock_reclaim(struct dmz_metadata *zmd) {
-	if (mutex_is_locked(&zmd->reclaim_lock))
-		return -1;
-
 	mutex_lock(&zmd->reclaim_lock);
-
 	return 0;
 }
 
 void dmz_unlock_reclaim(struct dmz_metadata *zmd) {
-	if (!mutex_is_locked(&zmd->reclaim_lock))
-		return;
-
 	mutex_unlock(&zmd->reclaim_lock);
 }
 
@@ -366,4 +353,15 @@ int dmz_reset_zone(struct dmz_metadata *zmd, int idx) {
 	if (ret)
 		pr_err("Reset Zone %d Failed. Err: %d", idx, ret);
 	return ret;
+}
+
+void dmz_check_zones(struct dmz_metadata *zmd) {
+	int active_n = 0;
+	for (int i = 0; i < zmd->nr_zones; i++) {
+		if (dmz_is_on_io(zmd, i)) {
+			active_n++;
+		}
+	}
+
+	pr_info("Active Zones: %d", active_n);
 }

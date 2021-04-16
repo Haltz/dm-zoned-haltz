@@ -29,4 +29,6 @@ int dmz_close_zone(struct dmz_metadata *zmd, int zone);
 int dmz_finish_zone(struct dmz_metadata *zmd, int zone);
 int dmz_reset_zone(struct dmz_metadata *zmd, int idx);
 
+void dmz_check_zones(struct dmz_metadata* zmd);
+
 #endif

@@ -27,6 +27,7 @@
 #include <linux/bio.h>
 #include <linux/log2.h>
 #include <linux/blk-mq.h>
+#include <linux/workqueue.h>
 
 #define KB (1 << 10)
 #define MB (1 << 20)
@@ -129,6 +130,25 @@ struct dmz_metadata {
 	spinlock_t meta_lock;
 	struct mutex reclaim_lock;
 	struct mutex freezone_lock;
+
+	struct workqueue_struct* reclaim_wq;
+};
+
+/**
+ * @brief Each work do a single bio job.
+ * 
+ */
+struct dmz_write_work {
+	struct work_struct work;
+	struct block_device *bdev;
+	struct bio *bio;
+};
+
+struct dmz_reclaim_work {
+	struct work_struct work;
+	struct block_device *bdev;
+	struct dmz_target* dmz;
+	int zone;
 };
 
 /** Note: sizeof(struct dmz_map) must be power of 2 to make sure block_size is aligned to sizeof(struct dmz_map) **/
@@ -198,6 +218,8 @@ struct dmz_zone {
 	struct mutex io_lock; // 32
 	// lock for mapping and bitmap
 	struct mutex map_lock; // 32
+
+	struct workqueue_struct *write_wq; // 8
 };
 
 int dmz_ctr_reclaim(void);
@@ -210,6 +232,8 @@ int dmz_pba_alloc(struct dmz_target *dmz);
 unsigned long dmz_reclaim_pba_alloc(struct dmz_target *dmz, int reclaim_zone);
 
 int dmz_map(struct dmz_target *dmz, struct bio *bio);
+
+void dmz_reclaim_work_process(struct work_struct *work);
 
 /** functions defined in dmz-metadata.h depends on structs defined above. **/
 #include "dmz-metadata.h"

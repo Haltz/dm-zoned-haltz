@@ -6,7 +6,7 @@ direct=1
 ioengine=libaio
 iodepth=32
 group_reporting
-size=256m
+size=2560m
 
 [wv]
 offset=0

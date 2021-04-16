@@ -2,6 +2,8 @@
 
 #define BIO_IS_FLUSH(bio) (bio_op(bio) == REQ_OP_FLUSH)
 
+static unsigned tgt_zone = 0;
+
 enum { DMZ_BLK_FREE, DMZ_BLK_VALID, DMZ_BLK_INVALID };
 enum { DMZ_UNMAPPED, DMZ_MAPPED };
 
@@ -40,50 +42,23 @@ static inline void dmz_bio_submit_off(struct dmz_bioctx *ctx) {
 int dmz_pba_alloc_n(struct dmz_target *dmz, int nblocks, int *result) {
 	struct dmz_metadata *zmd = dmz->zmd;
 	struct dmz_zone *zone = zmd->zone_start;
-	int cnt = 0;
 
-	int max_zone = 0, max_remain = zmd->zone_nr_blocks - zone[0].wp;
+	int ret = tgt_zone;
+	// This process probablly result in reclaim process blocked.
+	dmz_start_io(zmd, tgt_zone);
 
-second:
-	for (int i = 0; i < zmd->nr_zones; i++) {
-		// It is to avoid constantly IO on the same zone resulting in low performance.
-		if (!cnt && dmz_is_on_io(zmd, i))
-			continue;
-
-		if (cnt)
-			dmz_start_io(zmd, i);
-
-		if (zone[i].wp + nblocks < zmd->zone_nr_blocks) {
-			*result = 1;
-			max_zone = i;
-			goto ret;
-		}
-
-		int remain = zmd->zone_nr_blocks - zone[i].wp;
-		if (remain > max_remain) {
-			max_zone = i;
-			max_remain = remain;
-		}
-
-		if (cnt)
-			dmz_complete_io(zmd, i);
+	while (zone[tgt_zone].wp == zmd->zone_nr_blocks) {
+		dmz_complete_io(zmd, tgt_zone);
+		tgt_zone++;
+		tgt_zone %= (unsigned)dmz->zmd->nr_zones;
+		ret = tgt_zone;
+		dmz_start_io(zmd, tgt_zone);
 	}
 
-	*result = 0;
+	// tgt_zone++;
+	tgt_zone %= (unsigned)dmz->zmd->nr_zones;
 
-	if (!max_remain && !cnt) {
-		cnt = 1;
-		goto second;
-	}
-
-	if (!max_remain) {
-		return ~0;
-	}
-
-ret:
-	if (!cnt || max_remain)
-		dmz_start_io(zmd, max_zone);
-	return max_zone;
+	return ret;
 }
 
 unsigned long dmz_get_map(struct dmz_metadata *zmd, unsigned long lba) {
@@ -173,8 +148,6 @@ void dmz_submit_clone_bio(struct dmz_metadata *zmd, struct bio *clone, int idx, 
 
 	struct dmz_clone_bioctx *clone_ctx = clone->bi_private;
 	struct dmz_bioctx *ctx = clone_ctx->bioctx;
-
-	// dmz_open_zone(zmd, idx);
 
 	// This part of code will wait forever. Don't know why.
 	/** if (bio_op(clone) == REQ_OP_READ)
@@ -295,6 +268,16 @@ out:
 	return ret;
 }
 
+void dmz_write_work_process(struct work_struct *work) {
+	struct dmz_write_work *wrwk = container_of(work, struct dmz_write_work, work);
+}
+
+void dmz_reclaim_work_process(struct work_struct *work) {
+	struct dmz_reclaim_work *rcw = container_of(work, struct dmz_reclaim_work, work);
+
+	dmz_reclaim_zone(rcw->dmz, rcw->zone);
+}
+
 void dmz_write_clone_endio(struct bio *clone) {
 	blk_status_t status = clone->bi_status;
 	struct dmz_clone_bioctx *clone_bioctx = clone->bi_private;
@@ -318,7 +301,16 @@ void dmz_write_clone_endio(struct bio *clone) {
 
 	// When zone is full start reclaim
 	if (offset + nr_blocks == zmd->zone_nr_blocks) {
-		dmz_reclaim_zone(dmz, index);
+		struct dmz_reclaim_work *rcw = kzalloc(sizeof(struct dmz_reclaim_work), GFP_KERNEL);
+		if (rcw) {
+			rcw->bdev = zmd->target_bdev;
+			rcw->zone = index;
+			rcw->dmz = dmz;
+			INIT_WORK(&rcw->work, dmz_reclaim_work_process);
+			queue_work(zmd->reclaim_wq, &rcw->work);
+		} else {
+			pr_err("Mem not enough for reclaim.");
+		}
 	}
 
 	dmz_bio_try_endio(bioctx, bioctx->bio, status);
@@ -384,6 +376,19 @@ int dmz_submit_write_bio(struct dmz_target *dmz, struct bio *bio, struct dmz_bio
 		clone_bio->bi_private = clone_bioctx;
 
 		refcount_inc(&bioctx->ref);
+
+		// struct dmz_write_work *wrwk = kmalloc(sizeof(struct dmz_write_work), GFP_KERNEL);
+		// if (!wrwk) {
+		// 	kfree(clone_bio);
+		// 	kfree(clone_bioctx);
+		// 	goto out;
+		// }
+
+		// INIT_WORK(&wrwk->work, dmz_write_work_process);
+		// wrwk->bdev = zmd->target_bdev;
+		// wrwk->bio = clone_bio;
+
+		// queue_work(zone[rzone].write_wq, &wrwk->work);
 
 		// pr_info("<WRITE> lba: %d %x, pba: %d, %x", lba, lba, pba, pba);
 		dmz_submit_clone_bio(zmd, clone_bio, pba >> DMZ_ZONE_NR_BLOCKS_SHIFT, nr_blocks - blk_num);

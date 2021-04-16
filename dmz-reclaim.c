@@ -12,26 +12,10 @@ int dmz_ctr_reclaim(void) {
  */
 unsigned long dmz_p2l(struct dmz_metadata *zmd, unsigned long pba) {
 	int index = pba >> DMZ_ZONE_NR_BLOCKS_SHIFT;
-	int offset = pba & DMZ_ZONE_NR_BLOCKS_SHIFT;
+	int offset = pba & DMZ_ZONE_NR_BLOCKS_MASK;
 
 	struct dmz_zone *zone = &zmd->zone_start[index];
 	return (unsigned long)zone->reverse_mt[offset].block_id;
-}
-
-void dmz_reclaim_write_bio_endio(struct bio *bio) {
-	struct page *private = bio->bi_private;
-
-	// read failed.
-	if (bio->bi_status) {
-		set_page_dirty(private);
-		SetPageError(private);
-	}
-	end_page_writeback(private);
-	if (PageLocked(private)) {
-		unlock_page(private);
-	}
-
-	bio_put(bio);
 }
 
 void dmz_reclaim_read_bio_endio(struct bio *bio) {
@@ -66,7 +50,6 @@ void *dmz_reclaim_read_block(struct dmz_target *dmz, unsigned long pba) {
 	bio_set_dev(rbio, zmd->target_bdev);
 	rbio->bi_iter.bi_sector = pba << 3;
 	rbio->bi_private = page;
-	// Here PAGE_SIZE = DMZ_BLOCK_SIZE = 4KB
 	bio_add_page(rbio, page, PAGE_SIZE, 0);
 	bio_set_op_attrs(rbio, REQ_OP_READ, 0);
 	lock_page(page);
@@ -106,25 +89,22 @@ int dmz_reclaim_write_block(struct dmz_target *dmz, unsigned long pba, unsigned 
 		goto bio_alloc;
 	bio_set_dev(wbio, zmd->target_bdev);
 	wbio->bi_iter.bi_sector = pba << 3;
-	wbio->bi_private = page;
-	// Here PAGE_SIZE = DMZ_BLOCK_SIZE = 4KB
 	bio_add_page(wbio, page, PAGE_SIZE, 0);
 	bio_set_op_attrs(wbio, REQ_OP_WRITE, 0);
-	set_page_writeback(page);
-	wbio->bi_end_io = dmz_reclaim_write_bio_endio;
-	submit_bio(wbio);
-	wait_on_page_writeback(page);
-	if (PageDirty(page)) {
+
+	int status = submit_bio_wait(wbio);
+	bio_put(wbio);
+
+	if (status) {
+		pr_err("REC W ERR %d.", status);
 		goto write_err;
 	}
 
-	dmz_complete_io(zmd, pba >> DMZ_ZONE_NR_BLOCKS_SHIFT);
-	return 0;
+	return status;
 
 write_err:
 bio_alloc:
 invalid_kaddr:
-	dmz_complete_io(zmd, pba >> DMZ_ZONE_NR_BLOCKS_SHIFT);
 	return -1;
 }
 
@@ -137,13 +117,14 @@ invalid_kaddr:
  */
 unsigned long dmz_reclaim_pba_alloc(struct dmz_target *dmz, int reclaim_zone) {
 	struct dmz_metadata *zmd = dmz->zmd;
+	struct dmz_zone *zone = zmd->zone_start;
 
 	for (int i = 0; i < zmd->nr_zones; i++) {
 		if (i == reclaim_zone)
 			continue;
-		dmz_start_io(zmd, i);
-		if (zmd->zone_start[i].wp < zmd->zone_nr_blocks) {
-			return i * zmd->zone_nr_blocks + zmd->zone_start[i].wp;
+
+		if (zone[i].wp < zmd->zone_nr_blocks) {
+			return ((i << DMZ_ZONE_NR_BLOCKS_SHIFT) + zmd->zone_start[i].wp);
 		}
 	}
 
@@ -167,7 +148,6 @@ int dmz_make_reclaim_bio(struct dmz_target *dmz, unsigned long lba) {
 	int ret = 0;
 
 	int index = lba >> DMZ_ZONE_NR_BLOCKS_SHIFT, offset = lba & DMZ_ZONE_NR_BLOCKS_MASK;
-	// pr_info("%x, %x, %x\n", lba, index, offset);
 	unsigned long pba = zmd->zone_start[index].mt[offset].block_id;
 
 	unsigned long buffer = (unsigned long)dmz_reclaim_read_block(dmz, pba);
@@ -175,18 +155,21 @@ int dmz_make_reclaim_bio(struct dmz_target *dmz, unsigned long lba) {
 		goto read_err;
 	}
 
-	unsigned long new_pba = dmz_reclaim_pba_alloc(dmz, pba >> DMZ_BLOCK_SHIFT);
+	unsigned long new_pba = dmz_reclaim_pba_alloc(dmz, pba >> DMZ_ZONE_NR_BLOCKS_SHIFT);
 	if (dmz_is_default_pba(new_pba)) {
 		pr_err("alloc new_pba err.\n");
 		goto alloc_err;
 	}
+
+	// pr_info("READ %ld WRITE %ld", pba, new_pba);
+
 	ret = dmz_reclaim_write_block(dmz, new_pba, buffer);
-	if (!ret) {
-		zmd->zone_start[new_pba >> DMZ_ZONE_NR_BLOCKS_SHIFT].wp += 1;
-	}
+	zmd->zone_start[new_pba >> DMZ_ZONE_NR_BLOCKS_SHIFT].wp += 1;
 
 	if (!ret) {
 		dmz_update_map(dmz, lba, new_pba);
+	} else {
+		pr_err("WRITE ERR P MEM.");
 	}
 
 	free_page(buffer);
@@ -195,6 +178,7 @@ int dmz_make_reclaim_bio(struct dmz_target *dmz, unsigned long lba) {
 
 alloc_err:
 read_err:
+	pr_err("DMZ_MAKE_RECLAIM_BIO\n");
 	return -1;
 }
 
@@ -207,14 +191,19 @@ int dmz_reclaim_zone(struct dmz_target *dmz, int zone) {
 	struct dmz_metadata *zmd = dmz->zmd;
 	struct dmz_zone *cur_zone = &zmd->zone_start[zone];
 	int ret = 0;
+	// dmz_check_zones(zmd);
 
 	// make sure only one zone is under reclaim process.
 	dmz_lock_reclaim(zmd);
 
+	// suspend all other zones.
+	for (int i = 0; i < zmd->nr_zones; i++) {
+		dmz_start_io(zmd, i);
+	}
+
 	unsigned long *bitmap = cur_zone->bitmap;
 
-	// for (unsigned long offset = 0; offset < zmd->zone_nr_blocks; offset++) {
-	for (unsigned long offset = 0; offset < zmd->zone_nr_blocks; offset++) {
+	for (unsigned long offset = 0; offset < (unsigned long)cur_zone->wp; offset++) {
 		unsigned long valid_bitmap = bitmap_get_value8(bitmap, offset);
 
 		// First bit indicates blocks at this offset is valid or not.
@@ -232,6 +221,16 @@ int dmz_reclaim_zone(struct dmz_target *dmz, int zone) {
 
 			int ret = dmz_make_reclaim_bio(dmz, lba);
 			if (ret) {
+				struct dmz_reclaim_work *rcw = kzalloc(sizeof(struct dmz_reclaim_work), GFP_KERNEL);
+				if (rcw) {
+					rcw->bdev = zmd->target_bdev;
+					rcw->zone = zone;
+					rcw->dmz = dmz;
+					INIT_WORK(&rcw->work, dmz_reclaim_work_process);
+					queue_work(zmd->reclaim_wq, &rcw->work);
+				} else {
+					pr_err("Mem not enough for reclaim.");
+				}
 				goto reclaim_bio_err;
 			}
 		}
@@ -240,16 +239,16 @@ int dmz_reclaim_zone(struct dmz_target *dmz, int zone) {
 	cur_zone->wp = 0;
 
 	if (DMZ_IS_SEQ(cur_zone)) {
-		ret = blkdev_zone_mgmt(zmd->target_bdev, REQ_OP_ZONE_RESET, zmd->zone_nr_sectors * zone, zmd->zone_nr_sectors, GFP_KERNEL);
-	} else {
-	}
-
-	if (ret) {
-		pr_err("blkdev_zone_mgmt errcode %d\n", ret);
-		ret = 0;
+		if (blkdev_zone_mgmt(zmd->target_bdev, REQ_OP_ZONE_RESET, zone << DMZ_ZONE_NR_BLOCKS_SHIFT << 3, 1 << DMZ_ZONE_NR_BLOCKS_SHIFT << 3, GFP_KERNEL))
+			pr_err("blkdev_zone_mgmt errcode %d\n", ret);
 	}
 
 reclaim_bio_err:
+	for (int i = 0; i < zmd->nr_zones; i++) {
+		dmz_complete_io(zmd, i);
+	}
+
 	dmz_unlock_reclaim(zmd);
+	pr_info("End Reclaim Zone %d.\n", zone);
 	return ret;
 }

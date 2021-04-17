@@ -28,6 +28,7 @@
 #include <linux/log2.h>
 #include <linux/blk-mq.h>
 #include <linux/workqueue.h>
+#include <linux/delay.h>
 
 #define KB (1 << 10)
 #define MB (1 << 20)
@@ -81,6 +82,8 @@
 
 enum DMZ_STATUS { DMZ_BLOCK_FREE, DMZ_BLOCK_INVALID, DMZ_BLOCK_VALID };
 enum DMZ_ZONE_TYPE { DMZ_ZONE_NONE, DMZ_ZONE_SEQ, DMZ_ZONE_RND };
+
+extern int RESERVED_ZONE_ID;
 
 struct dmz_super {
 	__u64 magic; // 8

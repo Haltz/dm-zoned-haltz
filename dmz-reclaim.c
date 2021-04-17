@@ -1,7 +1,10 @@
 #include "dmz.h"
 
-int dmz_ctr_reclaim(void) {
-	return 0;
+int RESERVED_ZONE_ID = 0;
+
+static unsigned long dmz_reserved_zone_pba_alloc(struct dmz_metadata *zmd) {
+	struct dmz_zone *zone = zmd->zone_start;
+	return ((RESERVED_ZONE_ID << DMZ_ZONE_NR_BLOCKS_SHIFT) + zone[RESERVED_ZONE_ID].wp);
 }
 
 /**
@@ -109,29 +112,6 @@ invalid_kaddr:
 }
 
 /**
- * @brief return zone_id which free block is available
- * Note: Here zone under reclaim should not be chosen as target zone.
- * 
- * @param dmz 
- * @return int 
- */
-unsigned long dmz_reclaim_pba_alloc(struct dmz_target *dmz, int reclaim_zone) {
-	struct dmz_metadata *zmd = dmz->zmd;
-	struct dmz_zone *zone = zmd->zone_start;
-
-	for (int i = 0; i < zmd->nr_zones; i++) {
-		if (i == reclaim_zone)
-			continue;
-
-		if (zone[i].wp < zmd->zone_nr_blocks) {
-			return ((i << DMZ_ZONE_NR_BLOCKS_SHIFT) + zmd->zone_start[i].wp);
-		}
-	}
-
-	return ~0;
-}
-
-/**
  * @brief Reclaim a zone need to put all valid blocks in other one or several zones which has enough free space.
  * I need to make a bio to do this job.
  * 1. Read block in device into memory.
@@ -155,13 +135,11 @@ int dmz_make_reclaim_bio(struct dmz_target *dmz, unsigned long lba) {
 		goto read_err;
 	}
 
-	unsigned long new_pba = dmz_reclaim_pba_alloc(dmz, pba >> DMZ_ZONE_NR_BLOCKS_SHIFT);
+	unsigned long new_pba = dmz_reserved_zone_pba_alloc(zmd);
 	if (dmz_is_default_pba(new_pba)) {
 		pr_err("alloc new_pba err.\n");
 		goto alloc_err;
 	}
-
-	// pr_info("READ %ld WRITE %ld", pba, new_pba);
 
 	ret = dmz_reclaim_write_block(dmz, new_pba, buffer);
 	zmd->zone_start[new_pba >> DMZ_ZONE_NR_BLOCKS_SHIFT].wp += 1;
@@ -187,24 +165,45 @@ read_err:
 */
 // TODO support flush (seems no need, because all metadata is in memory)
 int dmz_reclaim_zone(struct dmz_target *dmz, int zone) {
-	pr_info("Reclaim Zone %d.\n", zone);
 	struct dmz_metadata *zmd = dmz->zmd;
 	struct dmz_zone *cur_zone = &zmd->zone_start[zone];
-	int ret = 0;
-	// dmz_check_zones(zmd);
+	struct dmz_zone *z = zmd->zone_start;
+	int ret = 0, errno = 0;
 
-	// make sure only one zone is under reclaim process.
 	dmz_lock_reclaim(zmd);
+	pr_info("Reclaim Zone %d.\n", zone);
+
+	for (int i = 0; i < zmd->nr_zones; i++)
+		pr_info("<STA> zone %d: %x, we: %x", i, zmd->zone_start[i].wp, zmd->zone_start[i].weight);
+
+	if (zone == RESERVED_ZONE_ID) {
+		pr_info("zone == RESERVED_ZONE_ID, %d", RESERVED_ZONE_ID);
+		goto end;
+	}
+
+	if (z[zone].weight == z[zone].wp) {
+		pr_info("z[zone].weight == z[zone].wp, %d", z[zone].weight);
+		goto end;
+	}
 
 	// suspend all other zones.
 	for (int i = 0; i < zmd->nr_zones; i++) {
 		dmz_start_io(zmd, i);
 	}
 
-	unsigned long *bitmap = cur_zone->bitmap;
+	// Reset reserved zone for reclaim.
+	// FIXME RESET didn't excute.
+	if (z[RESERVED_ZONE_ID].wp)
+		errno = dmz_reset_zone(zmd, RESERVED_ZONE_ID);
+	if (errno) {
+		ret = errno;
+		goto reclaim_bio_err;
+	}
 
 	for (unsigned long offset = 0; offset < (unsigned long)cur_zone->wp; offset++) {
-		unsigned long valid_bitmap = bitmap_get_value8(bitmap, offset);
+		unsigned long valid_bitmap = bitmap_get_value8(zmd->bitmap_start, (zone << DMZ_ZONE_NR_BLOCKS_SHIFT) + offset);
+		if (offset < 1)
+			pr_info("offset: 0x%lx, valid_bitmap: 0x%lx", offset, valid_bitmap);
 
 		// First bit indicates blocks at this offset is valid or not.
 		// Because bitmap_get_value8 is based on sizeof(unsigned long), so when get n (n>=56) bit value,
@@ -236,18 +235,24 @@ int dmz_reclaim_zone(struct dmz_target *dmz, int zone) {
 		}
 	}
 
-	cur_zone->wp = 0;
-
 	if (DMZ_IS_SEQ(cur_zone)) {
-		if (blkdev_zone_mgmt(zmd->target_bdev, REQ_OP_ZONE_RESET, zone << DMZ_ZONE_NR_BLOCKS_SHIFT << 3, 1 << DMZ_ZONE_NR_BLOCKS_SHIFT << 3, GFP_KERNEL))
-			pr_err("blkdev_zone_mgmt errcode %d\n", ret);
+		if ((errno = dmz_reset_zone(zmd, zone))) {
+			pr_err("Reset Current Zone %d Failed. Errno: %d", zone, errno);
+		}
 	}
+
+	RESERVED_ZONE_ID = zone;
+	pr_info("NOW RESERVED_ZONE_ID IS ZONE %d", zone);
+
+	for (int i = 0; i < zmd->nr_zones; i++)
+		pr_info("<END> zone %d: %x, we: %x", i, zmd->zone_start[i].wp, zmd->zone_start[i].weight);
 
 reclaim_bio_err:
 	for (int i = 0; i < zmd->nr_zones; i++) {
 		dmz_complete_io(zmd, i);
 	}
 
+end:
 	dmz_unlock_reclaim(zmd);
 	pr_info("End Reclaim Zone %d.\n", zone);
 	return ret;

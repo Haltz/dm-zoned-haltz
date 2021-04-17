@@ -6,16 +6,8 @@ direct=1
 ioengine=libaio
 iodepth=32
 group_reporting
-size=256m
+size=512m
 
 [wv]
 offset=0m
-
-[wv]
-offset=256m
-
-[wv]
-offset=0m
-
-[wv]
-offset=256m
+numjobs=10

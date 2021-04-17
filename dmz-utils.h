@@ -27,8 +27,8 @@ void dmz_unlock_reclaim(struct dmz_metadata *zmd);
 int dmz_open_zone(struct dmz_metadata *zmd, int zone);
 int dmz_close_zone(struct dmz_metadata *zmd, int zone);
 int dmz_finish_zone(struct dmz_metadata *zmd, int zone);
-int dmz_reset_zone(struct dmz_metadata *zmd, int idx);
+int dmz_reset_zone(struct dmz_metadata *zmd, int zone);
 
 void dmz_check_zones(struct dmz_metadata* zmd);
-
+bool dmz_is_full(struct dmz_metadata *zmd);
 #endif

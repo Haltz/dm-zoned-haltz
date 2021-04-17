@@ -348,20 +348,28 @@ int dmz_finish_zone(struct dmz_metadata *zmd, int idx) {
 int dmz_reset_zone(struct dmz_metadata *zmd, int idx) {
 	struct dmz_zone *zone = zmd->zone_start;
 	int ret = 0;
+
 	if (DMZ_IS_SEQ(&zone[idx]))
-		ret = blkdev_zone_mgmt(zmd->target_bdev, REQ_OP_ZONE_RESET, idx << (DMZ_ZONE_NR_BLOCKS_SHIFT + DMZ_BLOCK_SECTORS_SHIFT), zmd->zone_nr_sectors, GFP_KERNEL);
+		ret = blkdev_zone_mgmt(zmd->target_bdev, REQ_OP_ZONE_RESET, idx << (DMZ_ZONE_NR_BLOCKS_SHIFT + DMZ_BLOCK_SECTORS_SHIFT), 1 << (DMZ_ZONE_NR_BLOCKS_SHIFT + DMZ_BLOCK_SECTORS_SHIFT), GFP_KERNEL);
+	
 	if (ret)
 		pr_err("Reset Zone %d Failed. Err: %d", idx, ret);
+	else
+		pr_info("Reset Zone %d Succ.", idx);
+
+	zone[idx].wp = 0;
+	zone[idx].weight = 0;
 	return ret;
 }
 
-void dmz_check_zones(struct dmz_metadata *zmd) {
-	int active_n = 0;
+bool dmz_is_full(struct dmz_metadata *zmd) {
+	struct dmz_zone *zone = zmd->zone_start;
+	bool full = true;
 	for (int i = 0; i < zmd->nr_zones; i++) {
-		if (dmz_is_on_io(zmd, i)) {
-			active_n++;
+		if (zmd->zone_nr_blocks != zone[i].weight) {
+			full = false;
 		}
 	}
 
-	pr_info("Active Zones: %d", active_n);
+	return full;
 }

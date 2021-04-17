@@ -30,6 +30,16 @@ static inline void dmz_bio_submit_off(struct dmz_bioctx *ctx) {
 	mutex_unlock(&ctx->submit_done_lock);
 }
 
+static inline int next_tgt_zone(struct dmz_metadata *zmd) {
+	unsigned int nr = (unsigned int)zmd->nr_zones;
+	tgt_zone++;
+	tgt_zone %= nr;
+	if (tgt_zone == RESERVED_ZONE_ID)
+		tgt_zone++;
+	tgt_zone %= nr;
+	return tgt_zone;
+}
+
 /**
  * @brief func need hold meta_lock
  * make
@@ -39,24 +49,51 @@ static inline void dmz_bio_submit_off(struct dmz_bioctx *ctx) {
  * @param result 
  * @return{int} zone 
  */
-int dmz_pba_alloc_n(struct dmz_target *dmz, int nblocks, int *result) {
+int dmz_pba_alloc_n(struct dmz_target *dmz, int nblocks) {
 	struct dmz_metadata *zmd = dmz->zmd;
 	struct dmz_zone *zone = zmd->zone_start;
+	int cnt = 1;
+
+	dmz_lock_reclaim(zmd);
 
 	int ret = tgt_zone;
 	// This process probablly result in reclaim process blocked.
 	dmz_start_io(zmd, tgt_zone);
 
-	while (zone[tgt_zone].wp == zmd->zone_nr_blocks) {
+	while (zone[tgt_zone].wp == zmd->zone_nr_blocks || tgt_zone == RESERVED_ZONE_ID) {
 		dmz_complete_io(zmd, tgt_zone);
-		tgt_zone++;
-		tgt_zone %= (unsigned)dmz->zmd->nr_zones;
-		ret = tgt_zone;
+
+		if (cnt == zmd->nr_zones) {
+			if (dmz_is_full(zmd))
+				return ~0;
+
+			dmz_unlock_reclaim(zmd);
+			for (int i = 0; i < zmd->nr_zones; i++) {
+				struct dmz_reclaim_work *rcw = kzalloc(sizeof(struct dmz_reclaim_work), GFP_KERNEL);
+				if (rcw) {
+					rcw->bdev = zmd->target_bdev;
+					rcw->zone = i;
+					rcw->dmz = dmz;
+					INIT_WORK(&rcw->work, dmz_reclaim_work_process);
+					queue_work(zmd->reclaim_wq, &rcw->work);
+				} else {
+					pr_err("Mem not enough for reclaim.");
+				}
+				udelay(100);
+				pr_info("delay");
+			}
+
+			dmz_lock_reclaim(zmd);
+		}
+
+		ret = next_tgt_zone(zmd); // function will inc tgt_zone too.
+		cnt++;
 		dmz_start_io(zmd, tgt_zone);
 	}
 
-	// tgt_zone++;
-	tgt_zone %= (unsigned)dmz->zmd->nr_zones;
+	// next_tgt_zone(zmd);
+
+	dmz_unlock_reclaim(zmd);
 
 	return ret;
 }
@@ -67,10 +104,7 @@ unsigned long dmz_get_map(struct dmz_metadata *zmd, unsigned long lba) {
 
 	struct dmz_zone *cur_zone = zmd->zone_start + index;
 
-	unsigned long ret = cur_zone->mt[offset].block_id;
-	// pr_info("<READ-GET-MAP> lba: 0x%x, pba: 0x%x", lba, ret);
-
-	return ret;
+	return cur_zone->mt[offset].block_id;
 }
 
 // map logic to physical. if unmapped, return 0xffff ffff ffff ffff(default reserved blk_id representing invalid)
@@ -100,13 +134,13 @@ void dmz_bio_try_endio(struct dmz_bioctx *bioctx, struct bio *bio, blk_status_t 
 		bio->bi_status = status;
 
 	bio_endio(bio);
-	// pr_info("<%s>: Endio.", bio_op(bio) == REQ_OP_READ ? "READ" : "WRITE");
 	kfree(bioctx);
 }
 
 void dmz_update_map(struct dmz_target *dmz, unsigned long lba, unsigned long pba) {
 	// pr_err("<WRITE-UPDATE-MAP> lba: 0x%lx pba: 0x%lx\n", lba, pba);
 	struct dmz_metadata *zmd = dmz->zmd;
+	struct dmz_zone *z = zmd->zone_start;
 	int index = lba >> DMZ_ZONE_NR_BLOCKS_SHIFT;
 	int offset = lba & DMZ_ZONE_NR_BLOCKS_MASK;
 
@@ -131,11 +165,16 @@ void dmz_update_map(struct dmz_target *dmz, unsigned long lba, unsigned long pba
 
 	if (!dmz_is_default_pba(old_pba)) {
 		old_v = bitmap_get_value8(zmd->bitmap_start, old_pba);
-		bitmap_set_value8(zmd->bitmap_start, old_v & 0x7f, old_pba);
+		bitmap_set_value8(zmd->bitmap_start, old_v & 0xfe, old_pba);
+
+		int old_p_index = old_pba >> DMZ_ZONE_NR_BLOCKS_SHIFT;
+		z[old_p_index].weight--;
 	}
 
 	old_v = bitmap_get_value8(zmd->bitmap_start, pba);
-	bitmap_set_value8(zmd->bitmap_start, old_v | 0x80, pba);
+	bitmap_set_value8(zmd->bitmap_start, old_v | 0x1, pba);
+
+	z[p_index].weight++;
 }
 
 void dmz_submit_clone_bio(struct dmz_metadata *zmd, struct bio *clone, int idx, int remain_nr) {
@@ -274,8 +313,10 @@ void dmz_write_work_process(struct work_struct *work) {
 
 void dmz_reclaim_work_process(struct work_struct *work) {
 	struct dmz_reclaim_work *rcw = container_of(work, struct dmz_reclaim_work, work);
+	struct dmz_metadata *zmd = rcw->dmz->zmd;
 
-	dmz_reclaim_zone(rcw->dmz, rcw->zone);
+	for (int i = 0; i < zmd->nr_zones; i++)
+		dmz_reclaim_zone(rcw->dmz, i);
 }
 
 void dmz_write_clone_endio(struct bio *clone) {
@@ -301,6 +342,7 @@ void dmz_write_clone_endio(struct bio *clone) {
 
 	// When zone is full start reclaim
 	if (offset + nr_blocks == zmd->zone_nr_blocks) {
+		// Start Reclaim.
 		struct dmz_reclaim_work *rcw = kzalloc(sizeof(struct dmz_reclaim_work), GFP_KERNEL);
 		if (rcw) {
 			rcw->bdev = zmd->target_bdev;
@@ -338,7 +380,7 @@ int dmz_submit_write_bio(struct dmz_target *dmz, struct bio *bio, struct dmz_bio
 		int res = 0, ret = 0;
 		unsigned long pba;
 
-		int rzone = dmz_pba_alloc_n(dmz, nr_blocks, &res);
+		int rzone = dmz_pba_alloc_n(dmz, nr_blocks);
 		if (dmz_is_default_pba(rzone)) {
 			ret = -ENOSPC;
 			goto out;

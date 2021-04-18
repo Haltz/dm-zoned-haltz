@@ -351,7 +351,7 @@ int dmz_reset_zone(struct dmz_metadata *zmd, int idx) {
 
 	if (DMZ_IS_SEQ(&zone[idx]))
 		ret = blkdev_zone_mgmt(zmd->target_bdev, REQ_OP_ZONE_RESET, idx << (DMZ_ZONE_NR_BLOCKS_SHIFT + DMZ_BLOCK_SECTORS_SHIFT), 1 << (DMZ_ZONE_NR_BLOCKS_SHIFT + DMZ_BLOCK_SECTORS_SHIFT), GFP_KERNEL);
-	
+
 	if (ret)
 		pr_err("Reset Zone %d Failed. Err: %d", idx, ret);
 	else
@@ -372,4 +372,44 @@ bool dmz_is_full(struct dmz_metadata *zmd) {
 	}
 
 	return full;
+}
+
+unsigned long *dmz_bitmap_alloc(unsigned long size) {
+	unsigned long *bitmap;
+
+	bitmap = kzalloc(size, GFP_KERNEL);
+	if (!bitmap)
+		return NULL;
+	return bitmap;
+}
+
+void dmz_bitmap_free(unsigned long *bitmap) {
+	kfree(bitmap);
+}
+
+void dmz_set_bit(struct dmz_metadata *zmd, unsigned long pos) {
+	unsigned long bitmap = (unsigned long)zmd->bitmap_start;
+	unsigned long index = pos >> 3, offset = pos & ((0x1 << 3) - 1); // a byte can contain 8 bit (8 blocks's validity)
+	bitmap += index;
+	char v = *((char *)bitmap);
+	v = v | (0x1 << offset);
+	*((char *)bitmap) = v;
+}
+
+void dmz_clear_bit(struct dmz_metadata *zmd, unsigned long pos) {
+	unsigned long bitmap = (unsigned long)zmd->bitmap_start;
+	unsigned long index = pos >> 3, offset = pos & ((0x1 << 3) - 1); // a byte can contain 8 bit (8 blocks's validity)
+	bitmap += index;
+	char v = *((char *)bitmap);
+	v = v & (~(0x1 << offset));
+	*((char *)bitmap) = v;
+}
+
+bool dmz_test_bit(struct dmz_metadata *zmd, unsigned long pos) {
+	unsigned long bitmap = (unsigned long)zmd->bitmap_start;
+	unsigned long index = pos >> 3, offset = pos & ((0x1 << 3) - 1); // a byte can contain 8 bit (8 blocks's validity)
+	bitmap += index;
+	char v = *((char *)bitmap);
+	v = v & (0x1 << offset);
+	return !!v;
 }

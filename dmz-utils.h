@@ -29,6 +29,13 @@ int dmz_close_zone(struct dmz_metadata *zmd, int zone);
 int dmz_finish_zone(struct dmz_metadata *zmd, int zone);
 int dmz_reset_zone(struct dmz_metadata *zmd, int zone);
 
-void dmz_check_zones(struct dmz_metadata* zmd);
+void dmz_check_zones(struct dmz_metadata *zmd);
 bool dmz_is_full(struct dmz_metadata *zmd);
+
+unsigned long *dmz_bitmap_alloc(unsigned long size);
+void dmz_bitmap_free(unsigned long* bitmap);
+void dmz_set_bit(struct dmz_metadata *zmd, unsigned long pos);
+void dmz_clear_bit(struct dmz_metadata *zmd, unsigned long pos);
+bool dmz_test_bit(struct dmz_metadata *zmd, unsigned long pos);
+
 #endif

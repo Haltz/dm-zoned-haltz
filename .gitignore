@@ -55,3 +55,4 @@ build
 
 # fio verify output
 *.state
+wv.*

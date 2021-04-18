@@ -67,7 +67,7 @@ int dmz_pba_alloc_n(struct dmz_target *dmz, int nblocks) {
 			if (dmz_is_full(zmd))
 				return ~0;
 
-			dmz_unlock_reclaim(zmd);
+			// dmz_unlock_reclaim(zmd);
 			for (int i = 0; i < zmd->nr_zones; i++) {
 				struct dmz_reclaim_work *rcw = kzalloc(sizeof(struct dmz_reclaim_work), GFP_KERNEL);
 				if (rcw) {
@@ -83,7 +83,7 @@ int dmz_pba_alloc_n(struct dmz_target *dmz, int nblocks) {
 				pr_info("delay");
 			}
 
-			dmz_lock_reclaim(zmd);
+			// dmz_lock_reclaim(zmd);
 		}
 
 		ret = next_tgt_zone(zmd); // function will inc tgt_zone too.
@@ -161,20 +161,19 @@ void dmz_update_map(struct dmz_target *dmz, unsigned long lba, unsigned long pba
 	}
 
 	// update bitmap
-	int old_v;
 
 	if (!dmz_is_default_pba(old_pba)) {
-		old_v = bitmap_get_value8(zmd->bitmap_start, old_pba);
-		bitmap_set_value8(zmd->bitmap_start, old_v & 0xfe, old_pba);
+		dmz_clear_bit(zmd, old_pba);
 
 		int old_p_index = old_pba >> DMZ_ZONE_NR_BLOCKS_SHIFT;
 		z[old_p_index].weight--;
 	}
 
-	old_v = bitmap_get_value8(zmd->bitmap_start, pba);
-	bitmap_set_value8(zmd->bitmap_start, old_v | 0x1, pba);
-
+	dmz_set_bit(zmd, pba);
 	z[p_index].weight++;
+	if (mutex_is_locked(&zmd->reclaim_lock) && p_index != RESERVED_ZONE_ID) {
+		pr_info("zone %d weight ++ %d", p_index, z[p_index].weight);
+	}
 }
 
 void dmz_submit_clone_bio(struct dmz_metadata *zmd, struct bio *clone, int idx, int remain_nr) {
@@ -313,10 +312,8 @@ void dmz_write_work_process(struct work_struct *work) {
 
 void dmz_reclaim_work_process(struct work_struct *work) {
 	struct dmz_reclaim_work *rcw = container_of(work, struct dmz_reclaim_work, work);
-	struct dmz_metadata *zmd = rcw->dmz->zmd;
 
-	for (int i = 0; i < zmd->nr_zones; i++)
-		dmz_reclaim_zone(rcw->dmz, i);
+	dmz_reclaim_zone(rcw->dmz, rcw->zone);
 }
 
 void dmz_write_clone_endio(struct bio *clone) {
@@ -377,7 +374,7 @@ int dmz_submit_write_bio(struct dmz_target *dmz, struct bio *bio, struct dmz_bio
 	unsigned long lba = bio->bi_iter.bi_sector >> DMZ_BLOCK_SECTORS_SHIFT;
 
 	while (nr_blocks) {
-		int res = 0, ret = 0;
+		int ret = 0;
 		unsigned long pba;
 
 		int rzone = dmz_pba_alloc_n(dmz, nr_blocks);
@@ -477,7 +474,7 @@ int dmz_handle_discard(struct dmz_target *dmz, struct bio *bio) {
 			// discarding unmapped is invalid
 			// pr_info("[dmz-err]: try to [discard/write zeros] to unmapped block.(Tempoarily I allow it.\n)");
 		} else {
-			bitmap_set_value8(zmd->bitmap_start, 0x7f & bitmap_get_value8(zmd->bitmap_start, pba), pba);
+			dmz_clear_bit(zmd, pba);
 			// int index = pba >> DMZ_BLOCK_SHIFT, offset = pba % zmd->zone_nr_blocks;
 			// zone[index].reverse_mt[offset].block_id = ~0;
 			// index = lba >> DMZ_BLOCK_SHIFT, offset = lba % zmd->zone_nr_blocks;

@@ -142,7 +142,7 @@ int dmz_make_reclaim_bio(struct dmz_target *dmz, unsigned long lba) {
 	}
 
 	ret = dmz_reclaim_write_block(dmz, new_pba, buffer);
-	zmd->zone_start[new_pba >> DMZ_ZONE_NR_BLOCKS_SHIFT].wp += 1;
+	zmd->zone_start[RESERVED_ZONE_ID].wp += 1;
 
 	if (!ret) {
 		dmz_update_map(dmz, lba, new_pba);
@@ -169,22 +169,24 @@ int dmz_reclaim_zone(struct dmz_target *dmz, int zone) {
 	struct dmz_zone *cur_zone = &zmd->zone_start[zone];
 	struct dmz_zone *z = zmd->zone_start;
 	int ret = 0, errno = 0;
+	int cnt = 0;
 
 	dmz_lock_reclaim(zmd);
-	pr_info("Reclaim Zone %d.\n", zone);
-
-	for (int i = 0; i < zmd->nr_zones; i++)
-		pr_info("<STA> zone %d: %x, we: %x", i, zmd->zone_start[i].wp, zmd->zone_start[i].weight);
 
 	if (zone == RESERVED_ZONE_ID) {
-		pr_info("zone == RESERVED_ZONE_ID, %d", RESERVED_ZONE_ID);
+		// pr_info("zone == RESERVED_ZONE_ID, %d", RESERVED_ZONE_ID);
 		goto end;
 	}
 
 	if (z[zone].weight == z[zone].wp) {
-		pr_info("z[zone].weight == z[zone].wp, %d", z[zone].weight);
+		// pr_info("z[zone].weight == z[zone].wp, %d", z[zone].weight);
 		goto end;
 	}
+
+	pr_info("Reclaim Zone %d.\n", zone);
+
+	for (int i = 0; i < zmd->nr_zones; i++)
+		pr_info("<STA> zone %d: %x, we: %x", i, zmd->zone_start[i].wp, zmd->zone_start[i].weight);
 
 	// suspend all other zones.
 	for (int i = 0; i < zmd->nr_zones; i++) {
@@ -201,16 +203,7 @@ int dmz_reclaim_zone(struct dmz_target *dmz, int zone) {
 	}
 
 	for (unsigned long offset = 0; offset < (unsigned long)cur_zone->wp; offset++) {
-		unsigned long valid_bitmap = bitmap_get_value8(zmd->bitmap_start, (zone << DMZ_ZONE_NR_BLOCKS_SHIFT) + offset);
-		if (offset < 1)
-			pr_info("offset: 0x%lx, valid_bitmap: 0x%lx", offset, valid_bitmap);
-
-		// First bit indicates blocks at this offset is valid or not.
-		// Because bitmap_get_value8 is based on sizeof(unsigned long), so when get n (n>=56) bit value,
-		// value got in form of bits is n.n+1.n+2...63th bit, meaning can't always get all 8bit as return value.
-		unsigned int size = sizeof(unsigned long) << 3;
-		int shift = ((offset % size) + 8 > size) ? size - 1 - (offset % size) : 7;
-		if (valid_bitmap & (0x1 << shift)) {
+		if (dmz_test_bit(zmd, (zone << DMZ_ZONE_NR_BLOCKS_SHIFT) + offset)) {
 			unsigned long lba = dmz_p2l(zmd, (zone << DMZ_ZONE_NR_BLOCKS_SHIFT) + offset);
 			if (dmz_is_default_pba(lba)) {
 				// Here means that it is blk stores mt or rmt or bitmap. I have not update bitmap for them.
@@ -218,6 +211,7 @@ int dmz_reclaim_zone(struct dmz_target *dmz, int zone) {
 				continue;
 			}
 
+			cnt++;
 			int ret = dmz_make_reclaim_bio(dmz, lba);
 			if (ret) {
 				struct dmz_reclaim_work *rcw = kzalloc(sizeof(struct dmz_reclaim_work), GFP_KERNEL);
@@ -235,10 +229,10 @@ int dmz_reclaim_zone(struct dmz_target *dmz, int zone) {
 		}
 	}
 
-	if (DMZ_IS_SEQ(cur_zone)) {
-		if ((errno = dmz_reset_zone(zmd, zone))) {
-			pr_err("Reset Current Zone %d Failed. Errno: %d", zone, errno);
-		}
+	pr_info("CNT: %x", cnt);
+
+	if ((errno = dmz_reset_zone(zmd, zone))) {
+		pr_err("Reset Current Zone %d Failed. Errno: %d", zone, errno);
 	}
 
 	RESERVED_ZONE_ID = zone;

@@ -154,6 +154,12 @@ struct dmz_reclaim_work {
 	int zone;
 };
 
+struct dmz_resubmit_work {
+	struct work_struct work;
+	struct bio *bio;
+	struct dmz_target* dmz;
+};
+
 /** Note: sizeof(struct dmz_map) must be power of 2 to make sure block_size is aligned to sizeof(struct dmz_map) **/
 struct dmz_map {
 	unsigned long block_id;

@@ -17,3 +17,4 @@ FTL可以帮助解决这两个问题。目前采用的是Page-Mapping的FTL。
 - [ ] Reclaim（也可能是写导致的）时多次出现 blk_update_request: I/O error, dev sdb, sector 524288 op 0x1:(WRITE) flags 0x8800 phys_seg 0 prio class 0（这是1号Zone的开始）需要检查这个位置。
     - 看情况可能是前面的没有空间但是还要写导致的。如果是这样的话那么好像并非问题，还是再看看。
     - 预留出一个ZONE用作垃圾回收
+    - 可能是读没有上锁导致的。但是这并不影响现有的功能。

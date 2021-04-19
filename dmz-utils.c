@@ -413,3 +413,10 @@ bool dmz_test_bit(struct dmz_metadata *zmd, unsigned long pos) {
 	v = v & (0x1 << offset);
 	return !!v;
 }
+
+void dmz_print_zones(struct dmz_metadata *zmd, char *tag) {
+	struct dmz_zone *z = zmd->zone_start;
+	for (int i = 0; i < zmd->nr_zones; i++) {
+		pr_info("%s zone %d: %x, we: %x", tag, i, z[i].wp, z[i].weight);
+	}
+}

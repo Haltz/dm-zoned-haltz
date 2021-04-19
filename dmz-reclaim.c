@@ -169,7 +169,7 @@ int dmz_reclaim_zone(struct dmz_target *dmz, int zone) {
 	struct dmz_zone *cur_zone = &zmd->zone_start[zone];
 	struct dmz_zone *z = zmd->zone_start;
 	int ret = 0, errno = 0;
-	int cnt = 0;
+	int cnt = 0, origin_zone = RESERVED_ZONE_ID;
 
 	dmz_lock_reclaim(zmd);
 
@@ -185,13 +185,9 @@ int dmz_reclaim_zone(struct dmz_target *dmz, int zone) {
 
 	pr_info("Reclaim Zone %d.\n", zone);
 
+	dmz_print_zones(zmd, "start");
 	for (int i = 0; i < zmd->nr_zones; i++)
-		pr_info("<STA> zone %d: %x, we: %x", i, zmd->zone_start[i].wp, zmd->zone_start[i].weight);
-
-	// suspend all other zones.
-	for (int i = 0; i < zmd->nr_zones; i++) {
 		dmz_start_io(zmd, i);
-	}
 
 	// Reset reserved zone for reclaim.
 	// FIXME RESET didn't excute.
@@ -206,8 +202,6 @@ int dmz_reclaim_zone(struct dmz_target *dmz, int zone) {
 		if (dmz_test_bit(zmd, (zone << DMZ_ZONE_NR_BLOCKS_SHIFT) + offset)) {
 			unsigned long lba = dmz_p2l(zmd, (zone << DMZ_ZONE_NR_BLOCKS_SHIFT) + offset);
 			if (dmz_is_default_pba(lba)) {
-				// Here means that it is blk stores mt or rmt or bitmap. I have not update bitmap for them.
-				// Just ignore them because we have to flush them again before unload device.
 				continue;
 			}
 
@@ -229,8 +223,6 @@ int dmz_reclaim_zone(struct dmz_target *dmz, int zone) {
 		}
 	}
 
-	pr_info("CNT: %x", cnt);
-
 	if ((errno = dmz_reset_zone(zmd, zone))) {
 		pr_err("Reset Current Zone %d Failed. Errno: %d", zone, errno);
 	}
@@ -238,13 +230,11 @@ int dmz_reclaim_zone(struct dmz_target *dmz, int zone) {
 	RESERVED_ZONE_ID = zone;
 	pr_info("NOW RESERVED_ZONE_ID IS ZONE %d", zone);
 
-	for (int i = 0; i < zmd->nr_zones; i++)
-		pr_info("<END> zone %d: %x, we: %x", i, zmd->zone_start[i].wp, zmd->zone_start[i].weight);
+	dmz_print_zones(zmd, "end");
 
 reclaim_bio_err:
-	for (int i = 0; i < zmd->nr_zones; i++) {
+	for (int i = 0; i < zmd->nr_zones; i++)
 		dmz_complete_io(zmd, i);
-	}
 
 end:
 	dmz_unlock_reclaim(zmd);

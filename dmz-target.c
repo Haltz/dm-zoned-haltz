@@ -67,7 +67,7 @@ int dmz_pba_alloc_n(struct dmz_target *dmz, int nblocks) {
 			if (dmz_is_full(zmd))
 				return ~0;
 
-			// dmz_unlock_reclaim(zmd);
+			dmz_unlock_reclaim(zmd);
 			for (int i = 0; i < zmd->nr_zones; i++) {
 				struct dmz_reclaim_work *rcw = kzalloc(sizeof(struct dmz_reclaim_work), GFP_KERNEL);
 				if (rcw) {
@@ -80,10 +80,9 @@ int dmz_pba_alloc_n(struct dmz_target *dmz, int nblocks) {
 					pr_err("Mem not enough for reclaim.");
 				}
 				udelay(100);
-				pr_info("delay");
 			}
 
-			// dmz_lock_reclaim(zmd);
+			dmz_lock_reclaim(zmd);
 		}
 
 		ret = next_tgt_zone(zmd); // function will inc tgt_zone too.
@@ -91,7 +90,7 @@ int dmz_pba_alloc_n(struct dmz_target *dmz, int nblocks) {
 		dmz_start_io(zmd, tgt_zone);
 	}
 
-	// next_tgt_zone(zmd);
+	next_tgt_zone(zmd);
 
 	dmz_unlock_reclaim(zmd);
 
@@ -171,25 +170,11 @@ void dmz_update_map(struct dmz_target *dmz, unsigned long lba, unsigned long pba
 
 	dmz_set_bit(zmd, pba);
 	z[p_index].weight++;
-	if (mutex_is_locked(&zmd->reclaim_lock) && p_index != RESERVED_ZONE_ID) {
-		pr_info("zone %d weight ++ %d", p_index, z[p_index].weight);
-	}
 }
 
 void dmz_submit_clone_bio(struct dmz_metadata *zmd, struct bio *clone, int idx, int remain_nr) {
-	// When writing dmz_start_io is called in pba_alloc.
-	// In other cases it should be called here such as when reading.
-	// if (bio_op(clone) == REQ_OP_READ)
-	// 	dmz_start_io(zmd, idx);
-
-	// pr_info("<%s> Zone %d", bio_op(clone) == REQ_OP_READ ? "READ" : "WRITE", idx);
-
 	struct dmz_clone_bioctx *clone_ctx = clone->bi_private;
 	struct dmz_bioctx *ctx = clone_ctx->bioctx;
-
-	// This part of code will wait forever. Don't know why.
-	/** if (bio_op(clone) == REQ_OP_READ)
-	 	dmz_start_io(zmd, idx); **/
 
 	dmz_bio_submit_on(ctx);
 	if (!remain_nr) {
@@ -202,7 +187,6 @@ void dmz_submit_clone_bio(struct dmz_metadata *zmd, struct bio *clone, int idx, 
 void dmz_put_clone_bio(struct dmz_metadata *zmd, struct bio *clone, int idx) {
 	struct dmz_clone_bioctx *clone_ctx = clone->bi_private;
 	dmz_complete_io(zmd, idx);
-	// dmz_close_zone(zmd, idx);
 	kfree(clone_ctx);
 	bio_put(clone);
 }
@@ -316,6 +300,11 @@ void dmz_reclaim_work_process(struct work_struct *work) {
 	dmz_reclaim_zone(rcw->dmz, rcw->zone);
 }
 
+void dmz_resubmit_work_process(struct work_struct *work) {
+	struct dmz_resubmit_work *rsw = container_of(work, struct dmz_resubmit_work, work);
+	// dmz_submit_write_bio
+}
+
 void dmz_write_clone_endio(struct bio *clone) {
 	blk_status_t status = clone->bi_status;
 	struct dmz_clone_bioctx *clone_bioctx = clone->bi_private;
@@ -323,6 +312,10 @@ void dmz_write_clone_endio(struct bio *clone) {
 	struct dmz_metadata *zmd = dmz->zmd;
 	struct dmz_bioctx *bioctx = clone_bioctx->bioctx;
 	unsigned nr_blocks = clone_bioctx->nr_blocks;
+
+	int index, offset;
+
+	struct bio *resubmit_bio = NULL;
 
 	refcount_dec(&bioctx->ref);
 
@@ -332,10 +325,13 @@ void dmz_write_clone_endio(struct bio *clone) {
 			dmz_update_map(dmz, clone_bioctx->lba + i, clone_bioctx->new_pba + i);
 	} else {
 		bioctx->bio->bi_status = status;
+		pr_err("Errno %d\n", status);
+		goto resubmit;
 	}
 
-	int index = clone_bioctx->new_pba >> DMZ_ZONE_NR_BLOCKS_SHIFT;
-	int offset = clone_bioctx->new_pba & DMZ_ZONE_NR_BLOCKS_MASK;
+end_clone:
+	index = clone_bioctx->new_pba >> DMZ_ZONE_NR_BLOCKS_SHIFT;
+	offset = clone_bioctx->new_pba & DMZ_ZONE_NR_BLOCKS_MASK;
 
 	// When zone is full start reclaim
 	if (offset + nr_blocks == zmd->zone_nr_blocks) {
@@ -355,6 +351,23 @@ void dmz_write_clone_endio(struct bio *clone) {
 	dmz_bio_try_endio(bioctx, bioctx->bio, status);
 
 	dmz_put_clone_bio(zmd, clone, index);
+	return;
+
+resubmit:
+	pr_info("RESUBMIT\n");
+	resubmit_bio = bio_clone_fast(clone, GFP_KERNEL, NULL);
+	if (!resubmit_bio)
+		goto resubmit;
+	resubmit_bio->bi_iter.bi_sector = clone_bioctx->new_pba << DMZ_BLOCK_SECTORS_SHIFT;
+	resubmit_bio->bi_iter.bi_size = nr_blocks << DMZ_BLOCK_SHIFT;
+
+	bio_set_dev(resubmit_bio, zmd->target_bdev);
+	submit_bio_wait(resubmit_bio);
+	pr_info("Waiting End %s\n", resubmit_bio->bi_status ? "Fail" : "Succ");
+	if (resubmit_bio->bi_status)
+		goto resubmit;
+
+	goto end_clone;
 }
 
 int dmz_submit_write_bio(struct dmz_target *dmz, struct bio *bio, struct dmz_bioctx *bioctx) {
@@ -429,7 +442,6 @@ int dmz_submit_write_bio(struct dmz_target *dmz, struct bio *bio, struct dmz_bio
 
 		// queue_work(zone[rzone].write_wq, &wrwk->work);
 
-		// pr_info("<WRITE> lba: %d %x, pba: %d, %x", lba, lba, pba, pba);
 		dmz_submit_clone_bio(zmd, clone_bio, pba >> DMZ_ZONE_NR_BLOCKS_SHIFT, nr_blocks - blk_num);
 
 		bio_advance(bio, clone_bio->bi_iter.bi_size);

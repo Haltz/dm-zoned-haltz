@@ -138,7 +138,7 @@ void dmz_unload_zones(struct dmz_metadata *zmd) {
 unsigned long *dmz_load_bitmap(struct dmz_metadata *zmd) {
 	// First >>3 is sector to block, second >>3 is bit to byte
 	zmd->nr_bitmap_blocks = zmd->capacity >> 3 >> 3 >> DMZ_BLOCK_SHIFT;
-	unsigned long *bitmap = dmz_bitmap_alloc(zmd->capacity >> 3);
+	unsigned long *bitmap = dmz_bitmap_alloc(zmd->capacity >> 3 >> 3);
 	if (!bitmap) {
 		return NULL;
 	}

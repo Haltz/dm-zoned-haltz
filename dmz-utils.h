@@ -38,4 +38,6 @@ void dmz_set_bit(struct dmz_metadata *zmd, unsigned long pos);
 void dmz_clear_bit(struct dmz_metadata *zmd, unsigned long pos);
 bool dmz_test_bit(struct dmz_metadata *zmd, unsigned long pos);
 
+void dmz_print_zones(struct dmz_metadata* zmd, char* tag);
+
 #endif

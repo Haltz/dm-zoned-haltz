@@ -1,4 +1,5 @@
 [global]
+filename=/dev/dm-0
 rw=randwrite
 bs=4k
 direct=1
@@ -6,25 +7,9 @@ ioengine=libaio
 iodepth=32
 verify=crc32c
 group_reporting
-size=256m
+size=10240m
 
 [wv]
 offset=0
 [wv]
-offset=256m
-[wv]
-offset=512m
-[wv]
-offset=768m
-[wv]
 offset=1024m
-[wv]
-offset=1280m
-[wv]
-offset=1536m
-[wv]
-offset=1792m
-[wv]
-offset=2048m
-[wv]
-offset=2304m

@@ -231,6 +231,8 @@ int dmz_submit_read_bio(struct dmz_target *dmz, struct bio *bio, struct dmz_bioc
 
 	unsigned long lba = bio->bi_iter.bi_sector >> DMZ_BLOCK_SECTORS_SHIFT;
 
+	dmz_lock_reclaim(zmd);
+
 	while (nr_blocks) {
 		int ret = 0;
 		unsigned long pba = dmz_l2p(dmz, lba);
@@ -273,7 +275,7 @@ int dmz_submit_read_bio(struct dmz_target *dmz, struct bio *bio, struct dmz_bioc
 
 		refcount_inc(&bioctx->ref);
 
-		// dmz_start_io(zmd, pba >> DMZ_ZONE_NR_BLOCKS_SHIFT);
+		dmz_start_io(zmd, pba >> DMZ_ZONE_NR_BLOCKS_SHIFT);
 		dmz_submit_clone_bio(zmd, clone_bio, pba >> DMZ_ZONE_NR_BLOCKS_SHIFT, nr_blocks - 1);
 		bio_advance(bio, clone_bio->bi_iter.bi_size);
 
@@ -282,10 +284,12 @@ int dmz_submit_read_bio(struct dmz_target *dmz, struct bio *bio, struct dmz_bioc
 		nr_blocks--;
 	}
 
+	dmz_unlock_reclaim(zmd);
 	return ret;
 
 /** Error Handling **/
 out:
+	dmz_unlock_reclaim(zmd);
 	pr_err("<ERROR READ>");
 	return ret;
 }

@@ -8,8 +8,8 @@
  * @copyright Copyright (c) 2020
  * 
  */
-#ifndef DMZ_H
-#define DMZ_H
+#ifndef _DMZ_H_
+#define _DMZ_H_
 
 #include <linux/types.h>
 #include <linux/blkdev.h>
@@ -26,6 +26,9 @@
 #include <linux/module.h>
 #include <linux/bio.h>
 #include <linux/log2.h>
+#include <linux/blk-mq.h>
+#include <linux/workqueue.h>
+#include <linux/delay.h>
 
 #define KB (1 << 10)
 #define MB (1 << 20)
@@ -35,6 +38,7 @@
 #define DEV_CAPACITY 2 << 30;
 #define ZONE_SIZE (256 * MB)
 #define DEVICE_NAME_SIZE 512
+#define MAX_NR_BLOCKS_ONCE_READ 64
 
 /*
  * dm-zoned creates block devices with 4KB blocks, always.
@@ -51,7 +55,8 @@
 #define DMZ_BLOCK_SECTORS (DMZ_BLOCK_SIZE >> SECTOR_SHIFT)
 #define DMZ_BLOCK_SECTORS_MASK (DMZ_BLOCK_SECTORS - 1)
 
-#define DMZ_ZONE_BLOCKS_SHIFT (16)
+#define DMZ_ZONE_NR_BLOCKS_SHIFT (16)
+#define DMZ_ZONE_NR_BLOCKS_MASK ((1 << DMZ_ZONE_NR_BLOCKS_SHIFT) - 1)
 
 /*
  * 4KB block <-> 512B sector conversion.
@@ -70,122 +75,177 @@
 // default pba which value is 0x ffff ffff ffff ffff indicates that lba is not wrote yet
 #define dmz_is_default_pba(pba) (!(~pba))
 
-#define DMZ_IS_SEQ(zone) (zone->type == DMZ_ZONE_SEQ)
-#define DMZ_IS_RND(zone) (zone->type == DMZ_ZONE_RND)
+#define DMZ_IS_SEQ(zone) ((zone)->type == DMZ_ZONE_SEQ)
+#define DMZ_IS_RND(zone) ((zone)->type == DMZ_ZONE_RND)
 
 #define DMZ_MIN_BIOS 8192
 
 enum DMZ_STATUS { DMZ_BLOCK_FREE, DMZ_BLOCK_INVALID, DMZ_BLOCK_VALID };
 enum DMZ_ZONE_TYPE { DMZ_ZONE_NONE, DMZ_ZONE_SEQ, DMZ_ZONE_RND };
 
-/*
- * Super block information (one per metadata set).
- */
-struct dmz_sb {
-	sector_t block;
-	struct dmz_dev *dev;
-	struct dmz_mblk *mblk;
-	struct dmz_super *sb;
-	struct dmz_zone *zone;
+extern int RESERVED_ZONE_ID;
+
+struct dmz_super {
+	__u64 magic; // 8
+
+	__u64 zones_info; // 8;
+
+	__u8 dmz_uuid[16];
+
+	__u8 dev_uuid[16];
+
+	__u8 dmz_label[32];
+
+	__u8 reserved[432];
 };
 
 struct dmz_metadata {
 	struct dmz_dev *dev;
+	struct block_device *target_bdev;
 
-	u64 capacity;
+	unsigned long capacity;
 	char name[BDEVNAME_SIZE];
 
-	sector_t mapping_size;
-	sector_t bitmap_size;
+	unsigned long mapping_size;
+	unsigned long bitmap_size;
 
-	sector_t nr_zones;
-	sector_t nr_blocks;
+	unsigned long nr_zones;
+	unsigned long nr_blocks;
 
-	sector_t zone_nr_sectors;
-	sector_t zone_nr_blocks;
+	unsigned long zone_nr_sectors;
+	unsigned long zone_nr_blocks;
 
-	sector_t nr_map_blocks;
-	sector_t nr_bitmap_blocks;
+	unsigned long nr_map_blocks;
+	unsigned long nr_bitmap_blocks;
 
-	sector_t sb_block;
-	sector_t map_block;
-	sector_t bitmap_block;
+	int nr_zone_mt_need_blocks;
+	int nr_zone_bitmap_need_blocks;
+	int nr_zone_struct_need_blocks;
 
-	struct dmz_super *sb;
+	struct dmz_super *sblk;
 
 	struct dmz_zone *zone_start;
-	struct dmz_map *map_start;
 	unsigned long *bitmap_start;
 
-	// first useable block number.
-	unsigned long useable_start;
+	int useable_start;
 
 	// locks
 	spinlock_t meta_lock;
-	spinlock_t maptable_lock;
-	spinlock_t bitmap_lock;
+	struct mutex reclaim_lock;
+	struct mutex freezone_lock;
+
+	struct workqueue_struct* reclaim_wq;
 };
 
+/**
+ * @brief Each work do a single bio job.
+ * 
+ */
+struct dmz_write_work {
+	struct work_struct work;
+	struct block_device *bdev;
+	struct bio *bio;
+};
+
+struct dmz_reclaim_work {
+	struct work_struct work;
+	struct block_device *bdev;
+	struct dmz_target* dmz;
+	int zone;
+};
+
+struct dmz_resubmit_work {
+	struct work_struct work;
+	struct bio *bio;
+	struct dmz_target* dmz;
+};
+
+/** Note: sizeof(struct dmz_map) must be power of 2 to make sure block_size is aligned to sizeof(struct dmz_map) **/
 struct dmz_map {
-	__le64 block_id;
+	unsigned long block_id;
 };
 
 struct dmz_dev {
 	struct block_device *bdev;
 
 	char name[BDEVNAME_SIZE];
+	char major_minor_id[16];
 
-	sector_t capacity;
+	unsigned long capacity;
 
 	unsigned int nr_zones;
-	sector_t nr_zone_sectors;
+	unsigned long nr_zone_sectors;
+
+	struct request_queue *queue;
+	struct gendisk *disk;
+
+	struct blk_mq_tag_set set;
 };
 
 /*
  * Target descriptor.
  */
 struct dmz_target {
-	struct dm_dev *ddev;
 	struct dmz_dev *dev;
 
 	struct dmz_metadata *zmd;
 
 	unsigned int flags;
 
+	struct block_device *target_bdev;
+
 	// if we want to clone bios, bio_set is neccessary.
 	struct bio_set bio_set;
 
-	// This lock is to simplify development of demo by making program single-thread.
-	// Disable it when pipeline is good.
-	spinlock_t single_thread_lock;
+	refcount_t ref;
 };
 
+/** make sure size is power of 2 in order to fit one block size. **/
 struct dmz_zone {
-	// struct dmz_dev *dev;
-	// unsigned long flags;
-	// atomic_t refcount;
-	// unsigned int id;
-	unsigned int wp;
-	unsigned int weight;
-	// unsigned int physical_zone;
-	unsigned long *bitmap;
+	unsigned int wp; // 4
+	unsigned int weight; // 4
+	unsigned long *bitmap; // 8
 
-	int type;
+	int type; // 4
 
 	// Mapping Table
-	struct dmz_map *mt;
-	// Reverse Mapping Table
-	struct dmz_map *reverse_mt;
+	struct dmz_map *mt; // 8
+	// Reverse Mapping Table，when block store mappings(which has no lba), store corresponding zone.
+	struct dmz_map *reverse_mt; // 8
+
+	// mt block pbn
+	unsigned long mt_blk_n; // 8
+	// reverse mt block pbn
+	unsigned long rmt_blk_n; // 8
+	// bitmap block pbn
+	unsigned long bitmap_blk_n; // 8
+
+	// lock for wp
+	spinlock_t lock; // 4
+
+	// lock for io
+	struct mutex io_lock; // 32
+	// lock for mapping and bitmap
+	struct mutex map_lock; // 32
+
+	struct workqueue_struct *write_wq; // 8
 };
 
-int dmz_ctr_metadata(struct dmz_target *);
-void dmz_dtr_metadata(struct dmz_metadata *);
 int dmz_ctr_reclaim(void);
 int dmz_reclaim_zone(struct dmz_target *dmz, int zone);
 
-u64 dmz_get_map(struct dmz_metadata *zmd, u64 lba);
+unsigned long dmz_get_map(struct dmz_metadata *zmd, unsigned long lba);
 void dmz_update_map(struct dmz_target *dmz, unsigned long lba, unsigned long pba);
 
 int dmz_pba_alloc(struct dmz_target *dmz);
+unsigned long dmz_reclaim_pba_alloc(struct dmz_target *dmz, int reclaim_zone);
+
+int dmz_map(struct dmz_target *dmz, struct bio *bio);
+
+void dmz_reclaim_work_process(struct work_struct *work);
+
+/** functions defined in dmz-metadata.h depends on structs defined above. **/
+#include "dmz-metadata.h"
+#include "dmz-utils.h"
 
 #endif

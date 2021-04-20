@@ -236,7 +236,6 @@ int dmz_submit_read_bio(struct dmz_target *dmz, struct bio *bio, struct dmz_bioc
 	while (nr_blocks) {
 		int ret = 0;
 		unsigned long pba = dmz_l2p(dmz, lba);
-		// pr_info("<READ> lba: %ld %lx, pba: %ld, %lx, nr: %d", lba, lba, pba, pba, nr_blocks);
 
 		if (dmz_is_default_pba(pba)) {
 			dmz_handle_read_zero(bio, 1);
@@ -475,7 +474,6 @@ out:
 }
 
 int dmz_handle_discard(struct dmz_target *dmz, struct bio *bio) {
-	// pr_info("Discard or write zeros\n");
 	struct dmz_metadata *zmd = dmz->zmd;
 
 	int ret = 0;
@@ -488,7 +486,6 @@ int dmz_handle_discard(struct dmz_target *dmz, struct bio *bio) {
 
 		if (dmz_is_default_pba(pba)) {
 			// discarding unmapped is invalid
-			// pr_info("[dmz-err]: try to [discard/write zeros] to unmapped block.(Tempoarily I allow it.\n)");
 		} else {
 			dmz_clear_bit(zmd, pba);
 			// int index = pba >> DMZ_BLOCK_SHIFT, offset = pba % zmd->zone_nr_blocks;

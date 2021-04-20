@@ -174,16 +174,12 @@ int dmz_reclaim_zone(struct dmz_target *dmz, int zone) {
 	dmz_lock_reclaim(zmd);
 
 	if (zone == RESERVED_ZONE_ID) {
-		// pr_info("zone == RESERVED_ZONE_ID, %d", RESERVED_ZONE_ID);
 		goto end;
 	}
 
 	if (z[zone].weight == z[zone].wp) {
-		// pr_info("z[zone].weight == z[zone].wp, %d", z[zone].weight);
 		goto end;
 	}
-
-	pr_info("Reclaim Zone %d.\n", zone);
 
 	dmz_print_zones(zmd, "start");
 	for (int i = 0; i < zmd->nr_zones; i++)
@@ -228,7 +224,6 @@ int dmz_reclaim_zone(struct dmz_target *dmz, int zone) {
 	}
 
 	RESERVED_ZONE_ID = zone;
-	pr_info("NOW RESERVED_ZONE_ID IS ZONE %d", zone);
 
 	dmz_print_zones(zmd, "end");
 
@@ -238,6 +233,5 @@ reclaim_bio_err:
 
 end:
 	dmz_unlock_reclaim(zmd);
-	pr_info("End Reclaim Zone %d.\n", zone);
 	return ret;
 }

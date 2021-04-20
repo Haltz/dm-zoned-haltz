@@ -95,7 +95,6 @@ struct dmz_zone *dmz_load_zones(struct dmz_metadata *zmd, unsigned long *bitmap)
 	int ret = blkdev_report_zones(zmd->target_bdev, 0, BLK_ALL_ZONES, dmz_init_zones_type, zone_start);
 	if (ret) {
 		// FIXME
-		pr_err("Errno is 80, but callback is excuted correctly, how to fix it?\n");
 	}
 
 	return zone_start;
@@ -244,8 +243,6 @@ int dmz_load_metadata(struct dmz_metadata *zmd) {
 	}
 	zmd->bitmap_start = bitmap_ptr;
 
-	pr_info("Bitmap succeed.\n");
-
 	struct dmz_zone *zone_start = dmz_load_zones(zmd, zmd->bitmap_start);
 	if (!zone_start) {
 		ret = -ENOMEM;
@@ -253,7 +250,6 @@ int dmz_load_metadata(struct dmz_metadata *zmd) {
 	}
 	zmd->zone_start = zone_start;
 	zone_start->wp = zmd->useable_start;
-	pr_info("Zones succeed.\n");
 
 	if (dmz_locks_init(zmd))
 		goto locks;

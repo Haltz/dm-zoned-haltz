@@ -420,3 +420,29 @@ void dmz_print_zones(struct dmz_metadata *zmd, char *tag) {
 		pr_info("%s zone %d: %x, we: %x", tag, i, z[i].wp, z[i].weight);
 	}
 }
+
+/** lock in ascending order **/
+void dmz_lock_two_zone(struct dmz_metadata *zmd, int zone1, int zone2) {
+	if (zone1 < zone2) {
+		dmz_start_io(zmd, zone1);
+		dmz_start_io(zmd, zone2);
+	} else if (zone1 > zone2) {
+		dmz_start_io(zmd, zone2);
+		dmz_start_io(zmd, zone1);
+	} else {
+		dmz_start_io(zmd, zone1);
+	}
+}
+
+/** unlock in descending order **/
+void dmz_unlock_two_zone(struct dmz_metadata *zmd, int zone1, int zone2) {
+	if (zone1 > zone2) {
+		dmz_complete_io(zmd, zone1);
+		dmz_complete_io(zmd, zone2);
+	} else if (zone1 < zone2) {
+		dmz_complete_io(zmd, zone2);
+		dmz_complete_io(zmd, zone1);
+	} else {
+		dmz_complete_io(zmd, zone1);
+	}
+}

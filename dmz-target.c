@@ -79,9 +79,10 @@ int dmz_pba_alloc_n(struct dmz_target *dmz, int nblocks) {
 				} else {
 					pr_err("Mem not enough for reclaim.");
 				}
-				udelay(100);
 			}
 
+			udelay(1000);
+			cnt = 0;
 			dmz_lock_reclaim(zmd);
 		}
 

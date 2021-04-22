@@ -40,4 +40,6 @@ bool dmz_test_bit(struct dmz_metadata *zmd, unsigned long pos);
 
 void dmz_print_zones(struct dmz_metadata* zmd, char* tag);
 
+void dmz_lock_two_zone(struct dmz_metadata* zmd, int zone1, int zone2);
+void dmz_unlock_two_zone(struct dmz_metadata *zmd, int zone1, int zone2);
 #endif

@@ -163,7 +163,6 @@ read_err:
 /*
 * Reclaim specified zone.
 */
-// TODO support flush (seems no need, because all metadata is in memory)
 int dmz_reclaim_zone(struct dmz_target *dmz, int zone) {
 	struct dmz_metadata *zmd = dmz->zmd;
 	struct dmz_zone *cur_zone = &zmd->zone_start[zone];
@@ -181,12 +180,9 @@ int dmz_reclaim_zone(struct dmz_target *dmz, int zone) {
 		goto end;
 	}
 
-	dmz_print_zones(zmd, "start");
 	for (int i = 0; i < zmd->nr_zones; i++)
 		dmz_start_io(zmd, i);
 
-	// Reset reserved zone for reclaim.
-	// FIXME RESET didn't excute.
 	if (z[RESERVED_ZONE_ID].wp)
 		errno = dmz_reset_zone(zmd, RESERVED_ZONE_ID);
 	if (errno) {
@@ -225,12 +221,9 @@ int dmz_reclaim_zone(struct dmz_target *dmz, int zone) {
 
 	RESERVED_ZONE_ID = zone;
 
-	dmz_print_zones(zmd, "end");
-
 reclaim_bio_err:
 	for (int i = 0; i < zmd->nr_zones; i++)
 		dmz_complete_io(zmd, i);
-
 end:
 	dmz_unlock_reclaim(zmd);
 	return ret;

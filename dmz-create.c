@@ -1,7 +1,7 @@
 #include "dmz.h"
 
 #define DEVICE_NAME "dm"
-#define DEVICE_PATH "/dev/nullb0"
+#define DEVICE_PATH "/dev/sdb"
 
 static unsigned int major = 255;
 

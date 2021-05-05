@@ -339,7 +339,7 @@ end_clone:
 	offset = clone_bioctx->new_pba & DMZ_ZONE_NR_BLOCKS_MASK;
 
 	// When zone is full start reclaim
-	if (offset + nr_blocks == zmd->zone_nr_blocks) {
+	if ((zmd->zone_start[index].weight) < zmd->zone_start[index].wp - zmd->zone_start[index].wp / 4) {
 		// Start Reclaim.
 		struct dmz_reclaim_work *rcw = kzalloc(sizeof(struct dmz_reclaim_work), GFP_KERNEL);
 		if (rcw) {

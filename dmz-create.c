@@ -117,8 +117,9 @@ struct dmz_dev *dev_create(struct dmz_target *dmz) {
 	dev->disk->private_data = dev;
 	sprintf(dev->disk->disk_name, "dm-%d", minor);
 
+	unsigned nr_zones = i_size_read(dmz->target_bdev->bd_inode) >> DMZ_BLOCK_SHIFT >> DMZ_ZONE_NR_BLOCKS_SHIFT;
 	// We need to reserve 2 zones. One for reclaim, one is to avoid dead lock.
-	unsigned long capacity_nr_zones = (i_size_read(dmz->target_bdev->bd_inode) >> DMZ_BLOCK_SHIFT >> DMZ_ZONE_NR_BLOCKS_SHIFT) - 2;
+	unsigned long capacity_nr_zones = nr_zones - 2 - (nr_zones >> 4);
 
 	set_capacity(dev->disk, capacity_nr_zones << DMZ_ZONE_NR_BLOCKS_SHIFT << DMZ_BLOCK_SECTORS_SHIFT);
 

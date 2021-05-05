@@ -182,6 +182,8 @@ int dmz_reclaim_zone(struct dmz_target *dmz, int zone) {
 
 	for (int i = 0; i < zmd->nr_zones; i++)
 		dmz_start_io(zmd, i);
+	// dmz_start_io(zmd, RESERVED_ZONE_ID);
+	// dmz_start_io(zmd, zone);
 
 	if (z[RESERVED_ZONE_ID].wp)
 		errno = dmz_reset_zone(zmd, RESERVED_ZONE_ID);
@@ -224,6 +226,9 @@ int dmz_reclaim_zone(struct dmz_target *dmz, int zone) {
 reclaim_bio_err:
 	for (int i = zmd->nr_zones - 1; i >= 0; i--)
 		dmz_complete_io(zmd, i);
+	// dmz_complete_io(zmd, zone);
+	// dmz_complete_io(zmd, origin_zone);
+
 end:
 	dmz_unlock_reclaim(zmd);
 	return ret;

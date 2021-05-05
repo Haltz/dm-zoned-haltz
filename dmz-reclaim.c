@@ -222,7 +222,7 @@ int dmz_reclaim_zone(struct dmz_target *dmz, int zone) {
 	RESERVED_ZONE_ID = zone;
 
 reclaim_bio_err:
-	for (int i = 0; i < zmd->nr_zones; i++)
+	for (int i = zmd->nr_zones - 1; i >= 0; i--)
 		dmz_complete_io(zmd, i);
 end:
 	dmz_unlock_reclaim(zmd);

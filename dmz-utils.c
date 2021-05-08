@@ -4,6 +4,9 @@
 unsigned long meta_flags;
 unsigned long *zone_lock_flags;
 
+extern spinlock_t reclaim_spin;
+extern unsigned long reclaim_spin_flags;
+
 // TODO inc_wp should trigger recliam process under proper circumustance.
 int dmz_inc_wp(struct dmz_metadata *zmd, struct dmz_zone *zone) {
 	return 0;
@@ -353,9 +356,9 @@ int dmz_reset_zone(struct dmz_metadata *zmd, int idx) {
 		ret = blkdev_zone_mgmt(zmd->target_bdev, REQ_OP_ZONE_RESET, idx << (DMZ_ZONE_NR_BLOCKS_SHIFT + DMZ_BLOCK_SECTORS_SHIFT), 1 << (DMZ_ZONE_NR_BLOCKS_SHIFT + DMZ_BLOCK_SECTORS_SHIFT), GFP_KERNEL);
 
 	if (ret)
-		pr_err("Reset Zone %d Failed. Err: %d", idx, ret);
+		pr_err("Reset Zone %d Failed. Err: %d\n", idx, ret);
 	else
-		pr_info("Reset Zone %d Succ.", idx);
+		pr_info("Reset Zone %d Succ. Size: %d\n", idx, zone[idx].weight);
 
 	zone[idx].wp = 0;
 	zone[idx].weight = 0;
@@ -445,4 +448,99 @@ void dmz_unlock_two_zone(struct dmz_metadata *zmd, int zone1, int zone2) {
 	} else {
 		dmz_complete_io(zmd, zone1);
 	}
+}
+
+struct dmz_cache_node *dmz_read_cache(struct dmz_metadata *zmd, unsigned long lba) {
+	struct dmz_cache_node *ret = radix_tree_lookup(&zmd->cache, lba);
+	return ret;
+}
+
+void dmz_write_cache(struct dmz_metadata *zmd, unsigned long lba, unsigned long pba) {
+	struct radix_tree_root *cache = &zmd->cache;
+	dmz_lock_metadata(zmd);
+	struct dmz_cache_node *node = radix_tree_lookup(cache, lba);
+	if (node) {
+		// put lba node on head of cache list
+		struct dmz_cache_node *next = node->next;
+		struct dmz_cache_node *prev = node->prev;
+		if (next)
+			next->prev = prev;
+		if (prev)
+			prev->next = next;
+		node->prev = NULL;
+		node->next = zmd->cache_head;
+		if (zmd->cache_head)
+			zmd->cache_head->prev = node;
+		zmd->cache_head = node;
+		// update lba->pba
+		node->pba = pba;
+		dmz_unlock_metadata(zmd);
+		return;
+	} else {
+		// get tail node
+		struct dmz_cache_node *tail = zmd->cache_tail;
+		zmd->cache_size++;
+		// write to meta_zone
+		if (tail) {
+			int index = (tail->lba * sizeof(struct dmz_map)) / DMZ_BLOCK_SIZE;
+			int offset = (tail->lba * sizeof(struct dmz_map)) % DMZ_BLOCK_SIZE;
+			unsigned long pba = tail->pba, lba = tail->lba;
+			zmd->cache_tail = tail->prev;
+
+			int writeback = zmd->cache_size >= DMZ_MAP_CACHE_SIZE ? 1 : 0;
+			dmz_unlock_metadata(zmd);
+
+			if (writeback) {
+				unsigned long buffer = (unsigned long)dmz_reclaim_read_block(zmd, (META_ZONE_ID << DMZ_ZONE_NR_BLOCKS_SHIFT) + index);
+				if (!buffer) {
+					pr_err("Cache fault.\n");
+					return;
+				}
+				struct dmz_map *map = (struct dmz_map *)(buffer + offset);
+				map->block_id = pba;
+				dmz_reclaim_write_block(zmd, (META_ZONE_ID << DMZ_ZONE_NR_BLOCKS_SHIFT) + index, buffer);
+			}
+			// evict tail
+			radix_tree_delete(cache, lba);
+			kfree(tail);
+
+			dmz_lock_metadata(zmd);
+		}
+
+		// put cache node on head of cache list
+		struct dmz_cache_node *new = kzalloc(sizeof(struct dmz_cache_node), GFP_KERNEL);
+		if (!new) {
+			pr_err("Cache fault.\n");
+			dmz_unlock_metadata(zmd);
+			return;
+		}
+		new->next = zmd->cache_head;
+		if (zmd->cache_head)
+			zmd->cache_head->prev = new;
+		new->prev = NULL;
+		new->lba = lba;
+		new->pba = pba;
+		zmd->cache_head = new;
+		radix_tree_insert(cache, lba, new);
+		dmz_unlock_metadata(zmd);
+	}
+}
+
+bool dmz_zone_ofuse(int zone) {
+	if (zone == META_ZONE_ID)
+		return 0;
+
+	spin_lock_irqsave(&reclaim_spin, reclaim_spin_flags);
+	int ret = 1;
+	if (zone == RESERVED_ZONE_ID)
+		ret = 0;
+	if (zone == RESERVED_ZONE_ID_BACK)
+		ret = 0;
+	if (zone == RESERVED_ZONE_ID_MORE2)
+		ret = 0;
+	if (zone == RESERVED_ZONE_ID_MORE3)
+		ret = 0;
+	spin_unlock_irqrestore(&reclaim_spin, reclaim_spin_flags);
+
+	return ret;
 }

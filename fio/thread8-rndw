@@ -5,15 +5,11 @@ bs=4k
 direct=1
 ioengine=libaio
 iodepth=32
-verify=crc32c
 group_reporting
-size=10%
+size=2048m
+runtime=60s
 
 [wv]
+numjobs=8
 offset=0
-[wv]
-offset=10%
-[wv]
-offset=20%
-[wv]
-offset=30%
+offset_increment=2048m

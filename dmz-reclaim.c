@@ -1,10 +1,76 @@
 #include "dmz.h"
 
-int RESERVED_ZONE_ID = 0;
+int RESERVED_ZONE_ID = 0, RESERVED_ZONE_ID_BACK = 1, RESERVED_ZONE_ID_MORE2 = 2, RESERVED_ZONE_ID_MORE3 = 3, IDX_RESERVED_ZONE = 0;
 
-static unsigned long dmz_reserved_zone_pba_alloc(struct dmz_metadata *zmd) {
+bool *zone_in_reclaim_queue;
+spinlock_t zone_in_reclaim_queue_spin;
+unsigned long zone_in_reclaim_queue_spin_flags;
+
+spinlock_t reclaim_spin;
+unsigned long reclaim_spin_flags;
+
+bool zone_if_in_reclaim_queue(int zone) {
+	spin_lock_irqsave(&zone_in_reclaim_queue_spin, zone_in_reclaim_queue_spin_flags);
+	bool ret = zone_in_reclaim_queue[zone];
+	spin_unlock_irqrestore(&zone_in_reclaim_queue_spin, zone_in_reclaim_queue_spin_flags);
+	return ret;
+}
+
+void zone_clear_in_reclaim_queue(int zone) {
+	spin_lock_irqsave(&zone_in_reclaim_queue_spin, zone_in_reclaim_queue_spin_flags);
+	zone_in_reclaim_queue[zone] = false;
+	spin_unlock_irqrestore(&zone_in_reclaim_queue_spin, zone_in_reclaim_queue_spin_flags);
+}
+
+void zone_set_in_reclaim_queue(int zone) {
+	spin_lock_irqsave(&zone_in_reclaim_queue_spin, zone_in_reclaim_queue_spin_flags);
+	zone_in_reclaim_queue[zone] = true;
+	spin_unlock_irqrestore(&zone_in_reclaim_queue_spin, zone_in_reclaim_queue_spin_flags);
+}
+
+static int wait_free_reserved_zone(struct dmz_metadata *zmd) {
+	spin_lock_irqsave(&reclaim_spin, reclaim_spin_flags);
+	int ret;
+	switch (IDX_RESERVED_ZONE) {
+	case 0:
+		ret = RESERVED_ZONE_ID;
+		break;
+	case 1:
+		ret = RESERVED_ZONE_ID_BACK;
+		break;
+	case 2:
+		ret = RESERVED_ZONE_ID_MORE2;
+		break;
+	case 3:
+		ret = RESERVED_ZONE_ID_MORE3;
+		break;
+	}
+	IDX_RESERVED_ZONE++;
+	IDX_RESERVED_ZONE %= 4;
+	spin_unlock_irqrestore(&reclaim_spin, reclaim_spin_flags);
+
+	pr_info("Choose %d as rec zone.\n", ret);
+	dmz_start_io(zmd, ret);
+	return ret;
+}
+
+static void set_reserved_zone(int origin, int toset) {
+	spin_lock_irqsave(&reclaim_spin, reclaim_spin_flags);
+	if (origin == RESERVED_ZONE_ID)
+		RESERVED_ZONE_ID = toset;
+	if (origin == RESERVED_ZONE_ID_BACK)
+		RESERVED_ZONE_ID_BACK = toset;
+	if (origin == RESERVED_ZONE_ID_MORE2)
+		RESERVED_ZONE_ID_MORE2 = toset;
+	if (origin == RESERVED_ZONE_ID_MORE3)
+		RESERVED_ZONE_ID_MORE2 = toset;
+	pr_info("%d %d %d %d, origin: %d, toset: %d\n", RESERVED_ZONE_ID, RESERVED_ZONE_ID_BACK, RESERVED_ZONE_ID_MORE2, RESERVED_ZONE_ID_MORE3, origin, toset);
+	spin_unlock_irqrestore(&reclaim_spin, reclaim_spin_flags);
+}
+
+static unsigned long dmz_reserved_zone_pba_alloc(struct dmz_metadata *zmd, int reserve) {
 	struct dmz_zone *zone = zmd->zone_start;
-	return ((RESERVED_ZONE_ID << DMZ_ZONE_NR_BLOCKS_SHIFT) + zone[RESERVED_ZONE_ID].wp);
+	return ((reserve << DMZ_ZONE_NR_BLOCKS_SHIFT) + zone[reserve].wp);
 }
 
 /**
@@ -21,27 +87,7 @@ unsigned long dmz_p2l(struct dmz_metadata *zmd, unsigned long pba) {
 	return (unsigned long)zone->reverse_mt[offset].block_id;
 }
 
-void dmz_reclaim_read_bio_endio(struct bio *bio) {
-	struct bio_vec *bv = bio->bi_io_vec;
-	struct page *page = bv->bv_page;
-	struct page *private = bio->bi_private;
-
-	// read failed.
-	if (bio->bi_status) {
-		ClearPageUptodate(private);
-		SetPageError(private);
-	} else {
-		SetPageUptodate(private);
-	}
-	if (PageLocked(page)) {
-		unlock_page(page);
-	}
-
-	bio_put(bio);
-}
-
-void *dmz_reclaim_read_block(struct dmz_target *dmz, unsigned long pba) {
-	struct dmz_metadata *zmd = dmz->zmd;
+void *dmz_reclaim_read_block(struct dmz_metadata *zmd, unsigned long pba) {
 	struct page *page = alloc_page(GFP_KERNEL);
 	if (!page)
 		goto buffer_alloc;
@@ -52,36 +98,27 @@ void *dmz_reclaim_read_block(struct dmz_target *dmz, unsigned long pba) {
 		goto bio_alloc;
 	bio_set_dev(rbio, zmd->target_bdev);
 	rbio->bi_iter.bi_sector = pba << 3;
-	rbio->bi_private = page;
 	bio_add_page(rbio, page, PAGE_SIZE, 0);
 	bio_set_op_attrs(rbio, REQ_OP_READ, 0);
-	lock_page(page);
 
-	ClearPageUptodate(page);
-	rbio->bi_end_io = dmz_reclaim_read_bio_endio;
+	int status = submit_bio_wait(rbio);
+	bio_put(rbio);
 
-	submit_bio(rbio);
-
-	lock_page(page);
-
-	if (!PageUptodate(page)) {
-		pr_err("Read page err.\n");
+	if (status) {
+		pr_err("REC R ERR %d.", status);
 		goto read_err;
 	}
-	unlock_page(page);
-
 	return (void *)buffer;
 
 read_err:
-	unlock_page(page);
+	// unlock_page(page);
 bio_alloc:
 	free_page(buffer);
 buffer_alloc:
 	return NULL;
 }
 
-int dmz_reclaim_write_block(struct dmz_target *dmz, unsigned long pba, unsigned long buffer) {
-	struct dmz_metadata *zmd = dmz->zmd;
+int dmz_reclaim_write_block(struct dmz_metadata *zmd, unsigned long pba, unsigned long buffer) {
 	struct page *page = virt_to_page(buffer);
 	if (!page) {
 		goto invalid_kaddr;
@@ -123,26 +160,28 @@ invalid_kaddr:
  * @param{void *func(struct bio*)} endio 
  * @return{struct bio*} a bio waiting to be submitted
  */
-int dmz_make_reclaim_bio(struct dmz_target *dmz, unsigned long lba) {
+int dmz_make_reclaim_bio(struct dmz_target *dmz, unsigned long lba, int reserve) {
 	struct dmz_metadata *zmd = dmz->zmd;
 	int ret = 0;
 
 	int index = lba >> DMZ_ZONE_NR_BLOCKS_SHIFT, offset = lba & DMZ_ZONE_NR_BLOCKS_MASK;
 	unsigned long pba = zmd->zone_start[index].mt[offset].block_id;
 
-	unsigned long buffer = (unsigned long)dmz_reclaim_read_block(dmz, pba);
+	unsigned long buffer = (unsigned long)dmz_reclaim_read_block(zmd, pba);
 	if (!buffer) {
 		goto read_err;
 	}
 
-	unsigned long new_pba = dmz_reserved_zone_pba_alloc(zmd);
+	unsigned long new_pba = dmz_reserved_zone_pba_alloc(zmd, reserve);
 	if (dmz_is_default_pba(new_pba)) {
 		pr_err("alloc new_pba err.\n");
 		goto alloc_err;
 	}
 
-	ret = dmz_reclaim_write_block(dmz, new_pba, buffer);
-	zmd->zone_start[RESERVED_ZONE_ID].wp += 1;
+	ret = dmz_reclaim_write_block(zmd, new_pba, buffer);
+	zmd->zone_start[reserve].wp += 1;
+
+	dmz_write_cache(zmd, lba, new_pba);
 
 	if (!ret) {
 		dmz_update_map(dmz, lba, new_pba);
@@ -156,7 +195,7 @@ int dmz_make_reclaim_bio(struct dmz_target *dmz, unsigned long lba) {
 
 alloc_err:
 read_err:
-	pr_err("DMZ_MAKE_RECLAIM_BIO\n");
+	pr_err("reclam bio failed.\n");
 	return -1;
 }
 
@@ -168,11 +207,8 @@ int dmz_reclaim_zone(struct dmz_target *dmz, int zone) {
 	struct dmz_zone *cur_zone = &zmd->zone_start[zone];
 	struct dmz_zone *z = zmd->zone_start;
 	int ret = 0, errno = 0;
-	int cnt = 0, origin_zone = RESERVED_ZONE_ID;
 
-	dmz_lock_reclaim(zmd);
-
-	if (zone == RESERVED_ZONE_ID) {
+	if (!dmz_zone_ofuse(zone)) {
 		goto end;
 	}
 
@@ -180,13 +216,16 @@ int dmz_reclaim_zone(struct dmz_target *dmz, int zone) {
 		goto end;
 	}
 
-	for (int i = 0; i < zmd->nr_zones; i++)
-		dmz_start_io(zmd, i);
-	// dmz_start_io(zmd, RESERVED_ZONE_ID);
-	// dmz_start_io(zmd, zone);
+	int cnt = 0, origin_zone = wait_free_reserved_zone(zmd);
 
-	if (z[RESERVED_ZONE_ID].wp)
-		errno = dmz_reset_zone(zmd, RESERVED_ZONE_ID);
+	// for (int i = 0; i < zmd->nr_zones; i++)
+	// 	dmz_start_io(zmd, i);
+	dmz_start_io(zmd, zone);
+
+	if (z[origin_zone].wp) {
+		pr_err("Not expected %d.\n", origin_zone);
+		errno = dmz_reset_zone(zmd, origin_zone);
+	}
 	if (errno) {
 		ret = errno;
 		goto reclaim_bio_err;
@@ -200,7 +239,7 @@ int dmz_reclaim_zone(struct dmz_target *dmz, int zone) {
 			}
 
 			cnt++;
-			int ret = dmz_make_reclaim_bio(dmz, lba);
+			int ret = dmz_make_reclaim_bio(dmz, lba, origin_zone);
 			if (ret) {
 				struct dmz_reclaim_work *rcw = kzalloc(sizeof(struct dmz_reclaim_work), GFP_KERNEL);
 				if (rcw) {
@@ -221,15 +260,22 @@ int dmz_reclaim_zone(struct dmz_target *dmz, int zone) {
 		pr_err("Reset Current Zone %d Failed. Errno: %d", zone, errno);
 	}
 
-	RESERVED_ZONE_ID = zone;
+	set_reserved_zone(origin_zone, zone);
 
 reclaim_bio_err:
-	for (int i = zmd->nr_zones - 1; i >= 0; i--)
-		dmz_complete_io(zmd, i);
-	// dmz_complete_io(zmd, zone);
-	// dmz_complete_io(zmd, origin_zone);
+	// for (int i = zmd->nr_zones - 1; i >= 0; i--)
+	// 	dmz_complete_io(zmd, i);
+	dmz_complete_io(zmd, zone);
+	dmz_complete_io(zmd, origin_zone);
+
+	zone_clear_in_reclaim_queue(zone);
 
 end:
-	dmz_unlock_reclaim(zmd);
 	return ret;
+}
+
+void dmz_load_reclaim(struct dmz_metadata *zmd) {
+	spin_lock_init(&reclaim_spin);
+	spin_lock_init(&zone_in_reclaim_queue_spin);
+	zone_in_reclaim_queue = kzalloc(zmd->nr_zones * sizeof(bool), GFP_KERNEL);
 }

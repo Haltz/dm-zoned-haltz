@@ -58,6 +58,8 @@
 #define DMZ_ZONE_NR_BLOCKS_SHIFT (16)
 #define DMZ_ZONE_NR_BLOCKS_MASK ((1 << DMZ_ZONE_NR_BLOCKS_SHIFT) - 1)
 
+#define DMZ_MAP_CACHE_SIZE (1024 * 8)
+
 /*
  * 4KB block <-> 512B sector conversion.
  */
@@ -82,8 +84,15 @@
 
 enum DMZ_STATUS { DMZ_BLOCK_FREE, DMZ_BLOCK_INVALID, DMZ_BLOCK_VALID };
 enum DMZ_ZONE_TYPE { DMZ_ZONE_NONE, DMZ_ZONE_SEQ, DMZ_ZONE_RND };
+enum DMZ_ZONE_STATUS { DMZ_ZONE_FREE, DMZ_ZONE_RECLAIM };
 
-extern int RESERVED_ZONE_ID;
+extern int RESERVED_ZONE_ID, RESERVED_ZONE_ID_BACK, RESERVED_ZONE_ID_MORE2, RESERVED_ZONE_ID_MORE3;
+extern int META_ZONE_ID;
+
+struct dmz_cache_node {
+	struct dmz_cache_node *prev, *next;
+	unsigned long lba, pba;
+};
 
 struct dmz_super {
 	__u64 magic; // 8
@@ -134,7 +143,12 @@ struct dmz_metadata {
 	struct mutex reclaim_lock;
 	struct mutex freezone_lock;
 
-	struct workqueue_struct* reclaim_wq;
+	struct radix_tree_root cache;
+	struct dmz_cache_node *cache_head;
+	struct dmz_cache_node *cache_tail;
+	unsigned long cache_size;
+
+	struct workqueue_struct *reclaim_wq;
 };
 
 /**
@@ -150,14 +164,14 @@ struct dmz_write_work {
 struct dmz_reclaim_work {
 	struct work_struct work;
 	struct block_device *bdev;
-	struct dmz_target* dmz;
+	struct dmz_target *dmz;
 	int zone;
 };
 
 struct dmz_resubmit_work {
 	struct work_struct work;
 	struct bio *bio;
-	struct dmz_target* dmz;
+	struct dmz_target *dmz;
 };
 
 /** Note: sizeof(struct dmz_map) must be power of 2 to make sure block_size is aligned to sizeof(struct dmz_map) **/
@@ -207,6 +221,7 @@ struct dmz_zone {
 	unsigned long *bitmap; // 8
 
 	int type; // 4
+	int status;
 
 	// Mapping Table
 	struct dmz_map *mt; // 8
@@ -231,7 +246,7 @@ struct dmz_zone {
 	struct workqueue_struct *write_wq; // 8
 };
 
-int dmz_ctr_reclaim(void);
+void dmz_load_reclaim(struct dmz_metadata *zmd);
 int dmz_reclaim_zone(struct dmz_target *dmz, int zone);
 
 unsigned long dmz_get_map(struct dmz_metadata *zmd, unsigned long lba);
@@ -243,6 +258,11 @@ unsigned long dmz_reclaim_pba_alloc(struct dmz_target *dmz, int reclaim_zone);
 int dmz_map(struct dmz_target *dmz, struct bio *bio);
 
 void dmz_reclaim_work_process(struct work_struct *work);
+void *dmz_reclaim_read_block(struct dmz_metadata *zmd, unsigned long pba);
+int dmz_reclaim_write_block(struct dmz_metadata *zmd, unsigned long pba, unsigned long buffer);
+bool zone_if_in_reclaim_queue(int zone);
+void zone_clear_in_reclaim_queue(int zone);
+void zone_set_in_reclaim_queue(int zone);
 
 /** functions defined in dmz-metadata.h depends on structs defined above. **/
 #include "dmz-metadata.h"

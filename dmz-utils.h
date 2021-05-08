@@ -33,13 +33,18 @@ void dmz_check_zones(struct dmz_metadata *zmd);
 bool dmz_is_full(struct dmz_metadata *zmd);
 
 unsigned long *dmz_bitmap_alloc(unsigned long size);
-void dmz_bitmap_free(unsigned long* bitmap);
+void dmz_bitmap_free(unsigned long *bitmap);
 void dmz_set_bit(struct dmz_metadata *zmd, unsigned long pos);
 void dmz_clear_bit(struct dmz_metadata *zmd, unsigned long pos);
 bool dmz_test_bit(struct dmz_metadata *zmd, unsigned long pos);
 
-void dmz_print_zones(struct dmz_metadata* zmd, char* tag);
+void dmz_print_zones(struct dmz_metadata *zmd, char *tag);
 
-void dmz_lock_two_zone(struct dmz_metadata* zmd, int zone1, int zone2);
+void dmz_lock_two_zone(struct dmz_metadata *zmd, int zone1, int zone2);
 void dmz_unlock_two_zone(struct dmz_metadata *zmd, int zone1, int zone2);
+
+void dmz_write_cache(struct dmz_metadata *zmd, unsigned long lba, unsigned long pba);
+struct dmz_cache_node *dmz_read_cache(struct dmz_metadata *zmd, unsigned long lba);
+
+bool dmz_zone_ofuse(int zone);
 #endif

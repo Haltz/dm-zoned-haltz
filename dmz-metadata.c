@@ -10,6 +10,8 @@ enum {
 	DMZ_META_ERROR,
 };
 
+int META_ZONE_ID;
+
 unsigned long *dmz_read_mblk(struct dmz_metadata *zmd, unsigned long pba, int num) {
 	unsigned long *buffer = kzalloc(num << DMZ_BLOCK_SHIFT, GFP_KERNEL);
 	if (!buffer) {
@@ -57,6 +59,12 @@ static int dmz_init_zones_type(struct blk_zone *blkz, unsigned int num, void *da
 	default:
 		cur_zone->type = DMZ_ZONE_NONE;
 	}
+
+	if (blkz->type == BLK_ZONE_TYPE_CONVENTIONAL) {
+		META_ZONE_ID = num;
+	}
+
+	zone->status = DMZ_ZONE_FREE;
 
 	return 0;
 }
@@ -286,6 +294,16 @@ void dmz_unload_metadata(struct dmz_metadata *zmd) {
 	dmz_locks_cleanup(zmd);
 }
 
+void dmz_load_cache(struct dmz_metadata *zmd) {
+	INIT_RADIX_TREE(&zmd->cache, GFP_KERNEL);
+	zmd->cache_head = NULL;
+	zmd->cache_tail = NULL;
+	zmd->cache_size = 0;
+}
+
+void dmz_unload_cache(struct dmz_metadata *zmd) {
+}
+
 int dmz_ctr_metadata(struct dmz_target *dmz) {
 	if (!dmz) {
 		return -EINVAL;
@@ -326,6 +344,9 @@ int dmz_ctr_metadata(struct dmz_target *dmz) {
 		goto load_meta;
 	}
 
+	dmz_load_cache(zmd);
+	dmz_load_reclaim(zmd);
+
 	zmd->reclaim_wq = alloc_workqueue("dmz-reclaim-wq", WQ_MEM_RECLAIM | WQ_UNBOUND, 0);
 	if (!zmd->reclaim_wq)
 		goto reclaim_init;
@@ -336,6 +357,8 @@ int dmz_ctr_metadata(struct dmz_target *dmz) {
 	}
 
 	dmz->zmd = zmd;
+
+	pr_info("META_ZONE_ID: %d\n", META_ZONE_ID);
 
 	return 0;
 
@@ -352,6 +375,8 @@ void dmz_dtr_metadata(struct dmz_metadata *zmd) {
 		return;
 
 	kfree(zmd->sblk);
+
+	dmz_unload_cache(zmd);
 
 	dmz_unload_metadata(zmd);
 

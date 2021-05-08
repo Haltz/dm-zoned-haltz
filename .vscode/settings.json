@@ -11,6 +11,7 @@
         "mm.h": "c",
         "dmz-metadata.h": "c",
         "dmz-utils.h": "c",
-        "workqueue.h": "c"
+        "workqueue.h": "c",
+        "dmz-cache.h": "c"
     }
 }

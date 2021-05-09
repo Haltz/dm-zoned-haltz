@@ -89,6 +89,8 @@ enum DMZ_ZONE_STATUS { DMZ_ZONE_FREE, DMZ_ZONE_RECLAIM };
 extern int RESERVED_ZONE_ID, RESERVED_ZONE_ID_BACK, RESERVED_ZONE_ID_MORE2, RESERVED_ZONE_ID_MORE3;
 extern int META_ZONE_ID;
 
+extern spinlock_t reclaim_spin;
+
 struct dmz_cache_node {
 	struct dmz_cache_node *prev, *next;
 	unsigned long lba, pba;
@@ -256,6 +258,7 @@ int dmz_pba_alloc(struct dmz_target *dmz);
 unsigned long dmz_reclaim_pba_alloc(struct dmz_target *dmz, int reclaim_zone);
 
 int dmz_map(struct dmz_target *dmz, struct bio *bio);
+unsigned long dmz_l2p(struct dmz_target *dmz, sector_t lba);
 
 void dmz_reclaim_work_process(struct work_struct *work);
 void *dmz_reclaim_read_block(struct dmz_metadata *zmd, unsigned long pba);
@@ -263,6 +266,7 @@ int dmz_reclaim_write_block(struct dmz_metadata *zmd, unsigned long pba, unsigne
 bool zone_if_in_reclaim_queue(int zone);
 void zone_clear_in_reclaim_queue(int zone);
 void zone_set_in_reclaim_queue(int zone);
+bool dmz_zone_ofuse(int zone);
 
 /** functions defined in dmz-metadata.h depends on structs defined above. **/
 #include "dmz-metadata.h"

@@ -106,7 +106,7 @@ int dmz_pba_alloc_n(struct dmz_target *dmz, int nblocks) {
 unsigned long dmz_get_map(struct dmz_metadata *zmd, unsigned long lba) {
 	int index = (lba * sizeof(struct dmz_map)) / DMZ_BLOCK_SIZE;
 	int offset = (lba * sizeof(struct dmz_map)) % DMZ_BLOCK_SIZE;
-	
+
 	dmz_lock_metadata(zmd);
 	struct dmz_cache_node *node = dmz_read_cache(zmd, lba);
 	if (!node) {
@@ -456,6 +456,9 @@ int dmz_submit_write_bio(struct dmz_target *dmz, struct bio *bio, struct dmz_bio
 
 		// pr_info("Write Cache Size %x, %lx -> %lx\n", blk_num, lba, pba);
 		for (int i = 0; i < blk_num; i++) {
+			if (lba + i == 1) {
+				pr_info("%lx -> %lx\n", lba + i, pba + i);
+			}
 			dmz_write_cache(zmd, lba + i, pba + i);
 		}
 

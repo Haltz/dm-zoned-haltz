@@ -4,9 +4,6 @@
 unsigned long meta_flags;
 unsigned long *zone_lock_flags;
 
-extern spinlock_t reclaim_spin;
-extern unsigned long reclaim_spin_flags;
-
 // TODO inc_wp should trigger recliam process under proper circumustance.
 int dmz_inc_wp(struct dmz_metadata *zmd, struct dmz_zone *zone) {
 	return 0;
@@ -358,7 +355,7 @@ int dmz_reset_zone(struct dmz_metadata *zmd, int idx) {
 	if (ret)
 		pr_err("Reset Zone %d Failed. Err: %d\n", idx, ret);
 	else
-		pr_info("Reset Zone %d Succ. Size: %d\n", idx, zone[idx].weight);
+		pr_info("Reset Zone %d Succ. Wp: %d We: %d\n", idx, zone[idx].wp, zone[idx].weight);
 
 	zone[idx].wp = 0;
 	zone[idx].weight = 0;
@@ -524,23 +521,4 @@ void dmz_write_cache(struct dmz_metadata *zmd, unsigned long lba, unsigned long 
 		radix_tree_insert(cache, lba, new);
 		dmz_unlock_metadata(zmd);
 	}
-}
-
-bool dmz_zone_ofuse(int zone) {
-	if (zone == META_ZONE_ID)
-		return 0;
-
-	spin_lock_irqsave(&reclaim_spin, reclaim_spin_flags);
-	int ret = 1;
-	if (zone == RESERVED_ZONE_ID)
-		ret = 0;
-	if (zone == RESERVED_ZONE_ID_BACK)
-		ret = 0;
-	if (zone == RESERVED_ZONE_ID_MORE2)
-		ret = 0;
-	if (zone == RESERVED_ZONE_ID_MORE3)
-		ret = 0;
-	spin_unlock_irqrestore(&reclaim_spin, reclaim_spin_flags);
-
-	return ret;
 }

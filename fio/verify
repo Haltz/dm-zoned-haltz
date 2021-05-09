@@ -7,13 +7,15 @@ ioengine=libaio
 iodepth=32
 verify=crc32c
 group_reporting
-size=10%
+size=1024m
 
 [wv]
 offset=0
 [wv]
-offset=10%
+offset=1024m
 [wv]
-offset=20%
+offset=2048m
 [wv]
-offset=30%
+offset=3072m
+[wv]
+offset=4096m

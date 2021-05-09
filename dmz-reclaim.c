@@ -9,6 +9,16 @@ unsigned long zone_in_reclaim_queue_spin_flags;
 
 spinlock_t reclaim_spin;
 
+struct workqueue_struct *util_wq;
+
+struct dmz_util_work {
+	struct work_struct work;
+	unsigned long buffer;
+	unsigned long pba;
+	struct dmz_metadata *zmd;
+	struct mutex m;
+};
+
 bool zone_if_in_reclaim_queue(int zone) {
 	spin_lock_irqsave(&zone_in_reclaim_queue_spin, zone_in_reclaim_queue_spin_flags);
 	bool ret = zone_in_reclaim_queue[zone];
@@ -139,11 +149,18 @@ static unsigned long dmz_reserved_zone_pba_alloc(struct dmz_metadata *zmd, int r
  * @return{unsigned long} unsigned long 
  */
 unsigned long dmz_p2l(struct dmz_metadata *zmd, unsigned long pba) {
-	int index = pba >> DMZ_ZONE_NR_BLOCKS_SHIFT;
-	int offset = pba & DMZ_ZONE_NR_BLOCKS_MASK;
+	int index = (pba * sizeof(struct dmz_map)) / DMZ_BLOCK_SIZE;
+	int offset = (pba * sizeof(struct dmz_map)) % DMZ_BLOCK_SIZE;
 
-	struct dmz_zone *zone = &zmd->zone_start[index];
-	return (unsigned long)zone->reverse_mt[offset].block_id;
+	unsigned long buffer = wait_read(zmd, (META_ZONE_ID << DMZ_ZONE_NR_BLOCKS_SHIFT) + index);
+	if (!buffer) {
+		pr_err("Cache fault.\n");
+		return ~0;
+	}
+	struct dmz_map *map = (struct dmz_map *)(buffer + offset);
+	unsigned long ret = map->block_id;
+	free_page(buffer);
+	return ret;
 }
 
 void *dmz_reclaim_read_block(struct dmz_metadata *zmd, unsigned long pba) {
@@ -199,6 +216,8 @@ int dmz_reclaim_write_block(struct dmz_metadata *zmd, unsigned long pba, unsigne
 		goto write_err;
 	}
 
+	free_page(buffer);
+
 	return status;
 
 write_err:
@@ -219,11 +238,9 @@ invalid_kaddr:
  * @param{void *func(struct bio*)} endio 
  * @return{struct bio*} a bio waiting to be submitted
  */
-int dmz_make_reclaim_bio(struct dmz_target *dmz, unsigned long lba, int reserve) {
+int dmz_make_reclaim_bio(struct dmz_target *dmz, unsigned long lba, unsigned long pba, int reserve) {
 	struct dmz_metadata *zmd = dmz->zmd;
 	int ret = 0;
-
-	unsigned long pba = dmz_l2p(dmz, lba);
 
 	unsigned long buffer = (unsigned long)dmz_reclaim_read_block(zmd, pba);
 	if (!buffer) {
@@ -243,12 +260,6 @@ int dmz_make_reclaim_bio(struct dmz_target *dmz, unsigned long lba, int reserve)
 	zmd->zone_start[reserve].wp += 1;
 
 	dmz_write_cache(zmd, lba, new_pba);
-
-	if (!ret) {
-		dmz_update_map(dmz, lba, new_pba);
-	} else {
-		pr_err("WRITE ERR P MEM.");
-	}
 
 	free_page(buffer);
 
@@ -299,19 +310,9 @@ int dmz_reclaim_zone(struct dmz_target *dmz, int zone) {
 			}
 
 			cnt++;
-			int ret = dmz_make_reclaim_bio(dmz, lba, origin_zone);
+			int ret = dmz_make_reclaim_bio(dmz, lba, (zone << DMZ_ZONE_NR_BLOCKS_SHIFT) + offset, origin_zone);
 			if (ret) {
-				struct dmz_reclaim_work *rcw = kzalloc(sizeof(struct dmz_reclaim_work), GFP_KERNEL);
-				if (rcw) {
-					rcw->bdev = zmd->target_bdev;
-					rcw->zone = zone;
-					rcw->dmz = dmz;
-					INIT_WORK(&rcw->work, dmz_reclaim_work_process);
-					queue_work(zmd->reclaim_wq, &rcw->work);
-				} else {
-					pr_err("Mem not enough for reclaim.");
-				}
-				goto reclaim_bio_err;
+				pr_err("Mem not enough for reclaim.");
 			}
 		}
 	}
@@ -332,6 +333,48 @@ end:
 	return ret;
 }
 
+void dmz_utilwq_work_process_r(struct work_struct *work) {
+	struct dmz_util_work *w = container_of(work, struct dmz_util_work, work);
+	w->buffer = (unsigned long)dmz_reclaim_read_block(w->zmd, w->pba);
+	mutex_unlock(&w->m);
+}
+
+void dmz_utilwq_work_process_w(struct work_struct *work) {
+	struct dmz_util_work *w = container_of(work, struct dmz_util_work, work);
+	dmz_reclaim_write_block(w->zmd, w->pba, w->buffer);
+	mutex_unlock(&w->m);
+}
+
+unsigned long wait_read(struct dmz_metadata *zmd, unsigned long pba) {
+	struct dmz_util_work *w = kzalloc(sizeof(struct dmz_util_work), GFP_KERNEL);
+	w->zmd = zmd;
+	w->pba = pba;
+	mutex_init(&w->m);
+	INIT_WORK(&w->work, dmz_utilwq_work_process_r);
+	mutex_lock(&w->m);
+	queue_work(util_wq, &w->work);
+	mutex_lock(&w->m);
+	mutex_unlock(&w->m);
+	unsigned long buf = w->buffer;
+	kfree(w);
+	return buf;
+}
+
+void wait_write(struct dmz_metadata *zmd, unsigned long pba, unsigned long buffer) {
+	struct dmz_util_work *w = kzalloc(sizeof(struct dmz_util_work), GFP_KERNEL);
+	w->zmd = zmd;
+	w->buffer = buffer;
+	w->pba = pba;
+	mutex_init(&w->m);
+	INIT_WORK(&w->work, dmz_utilwq_work_process_w);
+	mutex_lock(&w->m);
+	queue_work(util_wq, &w->work);
+	mutex_lock(&w->m);
+	mutex_unlock(&w->m);
+	kfree(w);
+	return;
+}
+
 void dmz_load_reclaim(struct dmz_metadata *zmd) {
 	spin_lock_init(&reclaim_spin);
 	spin_lock_init(&zone_in_reclaim_queue_spin);
@@ -341,4 +384,12 @@ void dmz_load_reclaim(struct dmz_metadata *zmd) {
 	mutex_init(&m2);
 	mutex_init(&m3);
 	mutex_init(&m0);
+
+	util_wq = alloc_workqueue("dmz-util-wq", WQ_MEM_RECLAIM | WQ_UNBOUND, 0);
+
+	for (int i = 0; i < zmd->zone_nr_blocks; i++) {
+		struct page *p = alloc_page(GFP_KERNEL);
+		memset(page_address(p), ~0, DMZ_BLOCK_SIZE);
+		dmz_reclaim_write_block(zmd, (META_ZONE_ID << DMZ_ZONE_NR_BLOCKS_SHIFT) + i, (unsigned long)page_address(p));
+	}
 }

@@ -447,16 +447,27 @@ void dmz_unlock_two_zone(struct dmz_metadata *zmd, int zone1, int zone2) {
 	}
 }
 
-struct dmz_cache_node *dmz_read_cache(struct dmz_metadata *zmd, unsigned long lba) {
+unsigned long dmz_read_cache(struct dmz_metadata *zmd, unsigned long lba) {
 	struct dmz_cache_node *ret = radix_tree_lookup(&zmd->cache, lba);
-	return ret;
+	unsigned long pba = ret ? ret->pba : ~0;
+	return pba;
 }
 
 void dmz_write_cache(struct dmz_metadata *zmd, unsigned long lba, unsigned long pba) {
 	struct radix_tree_root *cache = &zmd->cache;
 	dmz_lock_metadata(zmd);
+	dmz_set_bit(zmd, pba);
+	if (lba < 16)
+		pr_info("SETMAP %ld -> %ld\n", lba, pba);
+	zmd->zone_start[pba >> DMZ_ZONE_NR_BLOCKS_SHIFT].weight++;
+
 	struct dmz_cache_node *node = radix_tree_lookup(cache, lba);
 	if (node) {
+		if (!dmz_is_default_pba(node->pba)) {
+			dmz_clear_bit(zmd, node->pba);
+			zmd->zone_start[node->pba >> DMZ_ZONE_NR_BLOCKS_SHIFT].weight--;
+		}
+
 		// put lba node on head of cache list
 		struct dmz_cache_node *next = node->next;
 		struct dmz_cache_node *prev = node->prev;
@@ -474,37 +485,6 @@ void dmz_write_cache(struct dmz_metadata *zmd, unsigned long lba, unsigned long 
 		dmz_unlock_metadata(zmd);
 		return;
 	} else {
-		// get tail node
-		struct dmz_cache_node *tail = zmd->cache_tail;
-		zmd->cache_size++;
-		// write to meta_zone
-		if (tail) {
-			int index = (tail->lba * sizeof(struct dmz_map)) / DMZ_BLOCK_SIZE;
-			int offset = (tail->lba * sizeof(struct dmz_map)) % DMZ_BLOCK_SIZE;
-			unsigned long pba = tail->pba, lba = tail->lba;
-			zmd->cache_tail = tail->prev;
-
-			int writeback = zmd->cache_size >= DMZ_MAP_CACHE_SIZE ? 1 : 0;
-			dmz_unlock_metadata(zmd);
-
-			if (writeback) {
-				unsigned long buffer = (unsigned long)dmz_reclaim_read_block(zmd, (META_ZONE_ID << DMZ_ZONE_NR_BLOCKS_SHIFT) + index);
-				if (!buffer) {
-					pr_err("Cache fault.\n");
-					return;
-				}
-				struct dmz_map *map = (struct dmz_map *)(buffer + offset);
-				map->block_id = pba;
-				dmz_reclaim_write_block(zmd, (META_ZONE_ID << DMZ_ZONE_NR_BLOCKS_SHIFT) + index, buffer);
-			}
-			// evict tail
-			radix_tree_delete(cache, lba);
-			kfree(tail);
-
-			dmz_lock_metadata(zmd);
-		}
-
-		// put cache node on head of cache list
 		struct dmz_cache_node *new = kzalloc(sizeof(struct dmz_cache_node), GFP_KERNEL);
 		if (!new) {
 			pr_err("Cache fault.\n");
@@ -518,7 +498,79 @@ void dmz_write_cache(struct dmz_metadata *zmd, unsigned long lba, unsigned long 
 		new->lba = lba;
 		new->pba = pba;
 		zmd->cache_head = new;
+		if (zmd->cache_tail == NULL)
+			zmd->cache_tail = new;
 		radix_tree_insert(cache, lba, new);
+
+		// get tail node
+		struct dmz_cache_node *tail = zmd->cache_tail;
+		if (zmd->cache_size < DMZ_MAP_CACHE_SIZE)
+			zmd->cache_size++;
+		// write to meta_zone
+
+		if (tail && zmd->cache_size >= DMZ_MAP_CACHE_SIZE) {
+			int index = (tail->lba * sizeof(struct dmz_map)) / DMZ_BLOCK_SIZE;
+			int offset = (tail->lba * sizeof(struct dmz_map)) % DMZ_BLOCK_SIZE;
+			unsigned long pba = tail->pba, lba = tail->lba;
+
+			dmz_unlock_metadata(zmd);
+
+			unsigned long buffer = wait_read(zmd, (META_ZONE_ID << DMZ_ZONE_NR_BLOCKS_SHIFT) + index);
+			if (!buffer) {
+				pr_err("Cache fault.\n");
+				return;
+			}
+			struct dmz_map *map = (struct dmz_map *)(buffer + offset);
+
+			if (!dmz_is_default_pba(map->block_id)) {
+				dmz_clear_bit(zmd, map->block_id);
+				zmd->zone_start[map->block_id >> DMZ_ZONE_NR_BLOCKS_SHIFT].weight--;
+			}
+			map->block_id = pba;
+			wait_write(zmd, (META_ZONE_ID << DMZ_ZONE_NR_BLOCKS_SHIFT) + index, buffer);
+
+			dmz_lock_metadata(zmd);
+
+			zmd->cache_tail = tail->prev;
+			if (tail->prev)
+				tail->prev->next = NULL;
+
+			// evict tail
+			radix_tree_delete(cache, lba);
+		} else if (zmd->cache_size >= 2) {
+			int index = (tail->lba * sizeof(struct dmz_map)) / DMZ_BLOCK_SIZE;
+			int offset = (tail->lba * sizeof(struct dmz_map)) % DMZ_BLOCK_SIZE;
+
+			dmz_unlock_metadata(zmd);
+
+			unsigned long buffer = wait_read(zmd, (META_ZONE_ID << DMZ_ZONE_NR_BLOCKS_SHIFT) + index);
+			if (!buffer) {
+				pr_err("Cache fault.\n");
+				return;
+			}
+			struct dmz_map *map = (struct dmz_map *)(buffer + offset);
+			if (!dmz_is_default_pba(map->block_id)) {
+				dmz_clear_bit(zmd, map->block_id);
+				zmd->zone_start[map->block_id >> DMZ_ZONE_NR_BLOCKS_SHIFT].weight--;
+			}
+			free_page(buffer);
+			dmz_lock_metadata(zmd);
+		}
+
+		// put cache node on head of cache list
+
 		dmz_unlock_metadata(zmd);
 	}
+
+	// change reverse map
+	int index = (pba * sizeof(struct dmz_map)) / DMZ_BLOCK_SIZE;
+	int offset = (pba * sizeof(struct dmz_map)) % DMZ_BLOCK_SIZE;
+	unsigned long buffer = wait_read(zmd, (META_ZONE_ID << DMZ_ZONE_NR_BLOCKS_SHIFT) + index + (1 << (DMZ_ZONE_NR_BLOCKS_SHIFT - 1)));
+	if (!buffer) {
+		pr_err("Cache fault.\n");
+		return;
+	}
+	struct dmz_map *rmap = (struct dmz_map *)(buffer + offset);
+	rmap->block_id = lba;
+	wait_write(zmd, (META_ZONE_ID << DMZ_ZONE_NR_BLOCKS_SHIFT) + index + (1 << (DMZ_ZONE_NR_BLOCKS_SHIFT - 1)), buffer);
 }

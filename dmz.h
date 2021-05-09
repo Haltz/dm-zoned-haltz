@@ -58,7 +58,7 @@
 #define DMZ_ZONE_NR_BLOCKS_SHIFT (16)
 #define DMZ_ZONE_NR_BLOCKS_MASK ((1 << DMZ_ZONE_NR_BLOCKS_SHIFT) - 1)
 
-#define DMZ_MAP_CACHE_SIZE (1024 * 8)
+#define DMZ_MAP_CACHE_SIZE (8)
 
 /*
  * 4KB block <-> 512B sector conversion.
@@ -267,6 +267,9 @@ bool zone_if_in_reclaim_queue(int zone);
 void zone_clear_in_reclaim_queue(int zone);
 void zone_set_in_reclaim_queue(int zone);
 bool dmz_zone_ofuse(int zone);
+
+unsigned long wait_read(struct dmz_metadata *zmd, unsigned long pba);
+void wait_write(struct dmz_metadata *zmd, unsigned long pba, unsigned long buffer);
 
 /** functions defined in dmz-metadata.h depends on structs defined above. **/
 #include "dmz-metadata.h"

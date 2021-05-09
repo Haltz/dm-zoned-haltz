@@ -44,5 +44,5 @@ void dmz_lock_two_zone(struct dmz_metadata *zmd, int zone1, int zone2);
 void dmz_unlock_two_zone(struct dmz_metadata *zmd, int zone1, int zone2);
 
 void dmz_write_cache(struct dmz_metadata *zmd, unsigned long lba, unsigned long pba);
-struct dmz_cache_node *dmz_read_cache(struct dmz_metadata *zmd, unsigned long lba);
+unsigned long dmz_read_cache(struct dmz_metadata *zmd, unsigned long lba);
 #endif

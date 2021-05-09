@@ -108,14 +108,19 @@ unsigned long dmz_get_map(struct dmz_metadata *zmd, unsigned long lba) {
 	int offset = (lba * sizeof(struct dmz_map)) % DMZ_BLOCK_SIZE;
 
 	dmz_lock_metadata(zmd);
-	struct dmz_cache_node *node = dmz_read_cache(zmd, lba);
-	if (!node) {
+	unsigned long pba = dmz_read_cache(zmd, lba);
+	if (dmz_is_default_pba(pba)) {
 		dmz_unlock_metadata(zmd);
-		unsigned long buffer = (unsigned long)dmz_reclaim_read_block(zmd, (META_ZONE_ID << DMZ_ZONE_NR_BLOCKS_SHIFT) + index);
+		unsigned long buffer = (unsigned long)wait_read(zmd, (META_ZONE_ID << DMZ_ZONE_NR_BLOCKS_SHIFT) + index);
 		struct dmz_map *map = (struct dmz_map *)(buffer + offset);
-		return map->block_id;
+		unsigned long ret = map->block_id;
+		free_page(buffer);
+		if (lba < 16)
+			pr_info("RADMAP %ld -> %ld\n", lba, ret);
+		return ret;
 	} else {
-		unsigned long pba = node->pba;
+		if (lba < 16)
+			pr_info("RADMAP %ld -> %ld\n", lba, pba);
 		dmz_unlock_metadata(zmd);
 		return pba;
 	}
@@ -155,24 +160,10 @@ void dmz_update_map(struct dmz_target *dmz, unsigned long lba, unsigned long pba
 	// pr_err("<WRITE-UPDATE-MAP> lba: 0x%lx pba: 0x%lx\n", lba, pba);
 	struct dmz_metadata *zmd = dmz->zmd;
 	struct dmz_zone *z = zmd->zone_start;
-	int index = lba >> DMZ_ZONE_NR_BLOCKS_SHIFT;
-	int offset = lba & DMZ_ZONE_NR_BLOCKS_MASK;
 
-	struct dmz_zone *cur_zone = &zmd->zone_start[index];
-	unsigned long old_pba = cur_zone->mt[offset].block_id;
-	cur_zone->mt[offset].block_id = pba;
+	unsigned long old_pba = dmz_l2p(dmz, lba);
 
 	int p_index = pba >> DMZ_ZONE_NR_BLOCKS_SHIFT;
-	int p_offset = pba & DMZ_ZONE_NR_BLOCKS_MASK;
-	struct dmz_zone *p_zone = &zmd->zone_start[p_index];
-	p_zone->reverse_mt[p_offset].block_id = lba;
-
-	if (!dmz_is_default_pba(old_pba)) {
-		int old_p_index = old_pba >> DMZ_ZONE_NR_BLOCKS_SHIFT;
-		int old_p_offset = old_pba & DMZ_ZONE_NR_BLOCKS_MASK;
-		struct dmz_zone *old_p_zone = &zmd->zone_start[old_p_index];
-		old_p_zone->reverse_mt[old_p_offset].block_id = ~0;
-	}
 
 	// update bitmap
 
@@ -339,10 +330,7 @@ void dmz_write_clone_endio(struct bio *clone) {
 	refcount_dec(&bioctx->ref);
 
 	// if write op succeeds, update mapping. (validate wp and invalidate old_pba if old_pba exists.)
-	if (status == BLK_STS_OK) {
-		for (int i = 0; i < nr_blocks; i++)
-			dmz_update_map(dmz, clone_bioctx->lba + i, clone_bioctx->new_pba + i);
-	} else {
+	if (status != BLK_STS_OK) {
 		bioctx->bio->bi_status = status;
 		pr_err("Errno %d\n", status);
 		goto resubmit;

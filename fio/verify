@@ -7,7 +7,7 @@ ioengine=libaio
 iodepth=32
 verify=crc32c
 group_reporting
-size=1024m
+size=64m
 
 [wv]
 offset=0

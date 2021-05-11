@@ -16,7 +16,7 @@ struct dmz_util_work {
 	unsigned long buffer;
 	unsigned long pba;
 	struct dmz_metadata *zmd;
-	struct mutex m;
+	unsigned long m;
 };
 
 bool zone_if_in_reclaim_queue(int zone) {
@@ -336,25 +336,27 @@ end:
 void dmz_utilwq_work_process_r(struct work_struct *work) {
 	struct dmz_util_work *w = container_of(work, struct dmz_util_work, work);
 	w->buffer = (unsigned long)dmz_reclaim_read_block(w->zmd, w->pba);
-	mutex_unlock(&w->m);
+	clear_bit_unlock(1, &w->m);
+	smp_mb__after_atomic();
+	wake_up_bit(&w->m, 1);
 }
 
 void dmz_utilwq_work_process_w(struct work_struct *work) {
 	struct dmz_util_work *w = container_of(work, struct dmz_util_work, work);
 	dmz_reclaim_write_block(w->zmd, w->pba, w->buffer);
-	mutex_unlock(&w->m);
+	clear_bit_unlock(1, &w->m);
+	smp_mb__after_atomic();
+	wake_up_bit(&w->m, 1);
 }
 
 unsigned long wait_read(struct dmz_metadata *zmd, unsigned long pba) {
 	struct dmz_util_work *w = kzalloc(sizeof(struct dmz_util_work), GFP_KERNEL);
 	w->zmd = zmd;
 	w->pba = pba;
-	mutex_init(&w->m);
 	INIT_WORK(&w->work, dmz_utilwq_work_process_r);
-	mutex_lock(&w->m);
+	set_bit(1, &w->m);
 	queue_work(util_wq, &w->work);
-	mutex_lock(&w->m);
-	mutex_unlock(&w->m);
+	wait_on_bit_io(&w->m, 1, TASK_UNINTERRUPTIBLE);
 	unsigned long buf = w->buffer;
 	kfree(w);
 	return buf;
@@ -365,12 +367,10 @@ void wait_write(struct dmz_metadata *zmd, unsigned long pba, unsigned long buffe
 	w->zmd = zmd;
 	w->buffer = buffer;
 	w->pba = pba;
-	mutex_init(&w->m);
 	INIT_WORK(&w->work, dmz_utilwq_work_process_w);
-	mutex_lock(&w->m);
+	set_bit(1, &w->m);
 	queue_work(util_wq, &w->work);
-	mutex_lock(&w->m);
-	mutex_unlock(&w->m);
+	wait_on_bit_io(&w->m, 1, TASK_UNINTERRUPTIBLE);
 	kfree(w);
 	return;
 }

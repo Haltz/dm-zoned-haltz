@@ -21,7 +21,22 @@ struct dmz_clone_bioctx {
 	unsigned long lba;
 	unsigned long new_pba;
 	unsigned long nr_blocks; // Read/Write Size
+	struct mutex m;
 };
+
+struct workqueue_struct *sad_wq;
+
+static void sad_work_f(struct work_struct *work) {
+	struct sad_work *w = container_of(work, struct sad_work, work);
+	mutex_unlock(w->m);
+}
+
+static void wake_sad_bit(struct mutex* m) {
+	struct sad_work *w = kzalloc(sizeof(struct sad_work), GFP_KERNEL);
+	INIT_WORK(&w->work, sad_work_f);
+	w->m = m;
+	queue_work(sad_wq, &w->work);
+}
 
 static void dmz_bio_submit_on(struct dmz_bioctx *ctx) {
 	spin_lock_irqsave(&ctx->submit_done_lock, ctx->flags);
@@ -409,6 +424,7 @@ int dmz_submit_write_bio(struct dmz_target *dmz, struct bio *bio, struct dmz_bio
 
 		pba = zone[rzone].wp + (rzone << DMZ_ZONE_NR_BLOCKS_SHIFT);
 		zone[rzone].wp += blk_num;
+		zone[rzone].weight += blk_num;
 
 		struct bio *clone_bio = bio_clone_fast(bio, GFP_KERNEL, NULL);
 		if (!clone_bio) {
@@ -438,10 +454,6 @@ int dmz_submit_write_bio(struct dmz_target *dmz, struct bio *bio, struct dmz_bio
 
 		refcount_inc(&bioctx->ref);
 
-		// pr_info("SUBMIT START IDX %ld, %lx\n", pba >> DMZ_ZONE_NR_BLOCKS_SHIFT, pba & DMZ_ZONE_NR_BLOCKS_MASK);
-		dmz_submit_clone_bio(zmd, clone_bio, pba >> DMZ_ZONE_NR_BLOCKS_SHIFT, nr_blocks - blk_num, bioctx);
-		// pr_info("SUBMIT END IDX %ld, %lx\n", pba >> DMZ_ZONE_NR_BLOCKS_SHIFT, pba & DMZ_ZONE_NR_BLOCKS_MASK);
-
 		// pr_info("Write Cache Size %x, %lx -> %lx\n", blk_num, lba, pba);
 		for (int i = 0; i < blk_num; i++) {
 			if (lba + i == 1) {
@@ -449,6 +461,10 @@ int dmz_submit_write_bio(struct dmz_target *dmz, struct bio *bio, struct dmz_bio
 			}
 			dmz_write_cache(zmd, lba + i, pba + i);
 		}
+		
+		// pr_info("SUBMIT START IDX %ld, %lx\n", pba >> DMZ_ZONE_NR_BLOCKS_SHIFT, pba & DMZ_ZONE_NR_BLOCKS_MASK);
+		dmz_submit_clone_bio(zmd, clone_bio, pba >> DMZ_ZONE_NR_BLOCKS_SHIFT, nr_blocks - blk_num, bioctx);
+		// pr_info("SUBMIT END IDX %ld, %lx\n", pba >> DMZ_ZONE_NR_BLOCKS_SHIFT, pba & DMZ_ZONE_NR_BLOCKS_MASK);
 
 		// clone_bio->bi_private = clone_bioctx;
 		// dmz_write_clone_endio(clone_bio);

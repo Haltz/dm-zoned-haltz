@@ -91,6 +91,14 @@ extern int META_ZONE_ID;
 
 extern spinlock_t reclaim_spin;
 
+// Why name it sad? Because I'm sad when i'm writing it.
+extern struct workqueue_struct *sad_wq;
+
+struct sad_work {
+	struct work_struct work;
+	struct mutex *m;
+};
+
 struct dmz_cache_node {
 	struct dmz_cache_node *prev, *next;
 	unsigned long lba, pba;

@@ -171,28 +171,6 @@ void dmz_bio_try_endio(struct dmz_bioctx *bioctx, struct bio *bio, blk_status_t 
 	kfree(bioctx);
 }
 
-void dmz_update_map(struct dmz_target *dmz, unsigned long lba, unsigned long pba) {
-	// pr_err("<WRITE-UPDATE-MAP> lba: 0x%lx pba: 0x%lx\n", lba, pba);
-	struct dmz_metadata *zmd = dmz->zmd;
-	struct dmz_zone *z = zmd->zone_start;
-
-	unsigned long old_pba = dmz_l2p(dmz, lba);
-
-	int p_index = pba >> DMZ_ZONE_NR_BLOCKS_SHIFT;
-
-	// update bitmap
-
-	if (!dmz_is_default_pba(old_pba)) {
-		dmz_clear_bit(zmd, old_pba);
-
-		int old_p_index = old_pba >> DMZ_ZONE_NR_BLOCKS_SHIFT;
-		z[old_p_index].weight--;
-	}
-
-	dmz_set_bit(zmd, pba);
-	z[p_index].weight++;
-}
-
 void dmz_submit_clone_bio(struct dmz_metadata *zmd, struct bio *clone, int idx, int remain_nr, struct dmz_bioctx *ctx) {
 	if (!remain_nr) {
 		dmz_bio_submit_on(ctx);
@@ -298,7 +276,6 @@ int dmz_submit_read_bio(struct dmz_target *dmz, struct bio *bio, struct dmz_bioc
 		// dmz_read_clone_endio(clone_bio);
 		// dmz_put_clone_bio(zmd, clone_bio, pba >> DMZ_ZONE_NR_BLOCKS_SHIFT);
 		bio_advance(bio, clone_bio->bi_iter.bi_size);
-		dmz_complete_io(zmd, pba >> DMZ_ZONE_NR_BLOCKS_SHIFT);
 
 	post_iter:
 		lba++;
@@ -354,23 +331,6 @@ void dmz_write_clone_endio(struct bio *clone) {
 end_clone:
 	index = clone_bioctx->new_pba >> DMZ_ZONE_NR_BLOCKS_SHIFT;
 	offset = clone_bioctx->new_pba & DMZ_ZONE_NR_BLOCKS_MASK;
-
-	// When zone is full start reclaim
-	// if ((zmd->zone_start[index].weight) < zmd->zone_start[index].wp - zmd->zone_start[index].wp / 4) {
-	// 	if (!zone_if_in_reclaim_queue(index)) {
-	// 		// Start Reclaim.
-	// 		struct dmz_reclaim_work *rcw = kzalloc(sizeof(struct dmz_reclaim_work), GFP_KERNEL);
-	// 		if (rcw) {
-	// 			rcw->bdev = zmd->target_bdev;
-	// 			rcw->zone = index;
-	// 			rcw->dmz = dmz;
-	// 			INIT_WORK(&rcw->work, dmz_reclaim_work_process);
-	// 			queue_work(zmd->reclaim_wq, &rcw->work);
-	// 		} else {
-	// 			pr_err("Mem not enough for reclaim.");
-	// 		}
-	// 	}
-	// }
 
 	dmz_bio_try_endio(bioctx, bioctx->bio, status);
 

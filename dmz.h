@@ -231,7 +231,7 @@ struct dmz_zone {
 	unsigned long *bitmap; // 8
 
 	int type; // 4
-	int status;
+	unsigned long status;
 
 	// Mapping Table
 	struct dmz_map *mt; // 8
@@ -260,7 +260,6 @@ void dmz_load_reclaim(struct dmz_metadata *zmd);
 int dmz_reclaim_zone(struct dmz_target *dmz, int zone);
 
 unsigned long dmz_get_map(struct dmz_metadata *zmd, unsigned long lba);
-void dmz_update_map(struct dmz_target *dmz, unsigned long lba, unsigned long pba);
 
 int dmz_pba_alloc(struct dmz_target *dmz);
 unsigned long dmz_reclaim_pba_alloc(struct dmz_target *dmz, int reclaim_zone);

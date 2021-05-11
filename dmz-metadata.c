@@ -64,8 +64,9 @@ static int dmz_init_zones_type(struct blk_zone *blkz, unsigned int num, void *da
 		META_ZONE_ID = num;
 	}
 
-	zone->status = DMZ_ZONE_FREE;
-
+	clear_bit_unlock(1, &cur_zone->status);
+	smp_mb__after_atomic();
+	wake_up_bit(&cur_zone->status, 1);
 	return 0;
 }
 

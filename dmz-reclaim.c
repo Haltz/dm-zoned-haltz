@@ -275,6 +275,7 @@ read_err:
 * Reclaim specified zone.
 */
 int dmz_reclaim_zone(struct dmz_target *dmz, int zone) {
+	pr_info("ABC\n");
 	struct dmz_metadata *zmd = dmz->zmd;
 	struct dmz_zone *cur_zone = &zmd->zone_start[zone];
 	struct dmz_zone *z = zmd->zone_start;

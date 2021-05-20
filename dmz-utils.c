@@ -243,8 +243,6 @@ void dmz_write_cache(struct dmz_metadata *zmd, unsigned long lba, unsigned long 
 	struct radix_tree_root *cache = &zmd->cache;
 	dmz_lock_metadata(zmd);
 	dmz_set_bit(zmd, pba);
-	if (lba < 16)
-		pr_info("SETMAP %ld -> %ld\n", lba, pba);
 
 	struct dmz_cache_node *node = radix_tree_lookup(cache, lba);
 	if (node) {
@@ -292,12 +290,20 @@ void dmz_write_cache(struct dmz_metadata *zmd, unsigned long lba, unsigned long 
 		if (zmd->cache_size < DMZ_MAP_CACHE_SIZE)
 			zmd->cache_size++;
 		// write to meta_zone
-		int index = (tail->lba * sizeof(struct dmz_map)) / DMZ_BLOCK_SIZE;
-		int offset = (tail->lba * sizeof(struct dmz_map)) % DMZ_BLOCK_SIZE;
-		unsigned long pba = tail->pba, lba = tail->lba;
+		int tindex = (tail->lba * sizeof(struct dmz_map)) / DMZ_BLOCK_SIZE;
+		int toffset = (tail->lba * sizeof(struct dmz_map)) % DMZ_BLOCK_SIZE;
+		int index = (lba * sizeof(struct dmz_map)) / DMZ_BLOCK_SIZE;
+		int offset = (lba * sizeof(struct dmz_map)) % DMZ_BLOCK_SIZE;
+
+		zmd->cache_tail = tail->prev;
+		if (tail->prev)
+			tail->prev->next = NULL;
+		// evict tail
+		radix_tree_delete(cache, tail->lba);
 
 		dmz_unlock_metadata(zmd);
 
+		// 当前块clearbit
 		unsigned long buffer = wait_read(zmd, (META_ZONE_ID << DMZ_ZONE_NR_BLOCKS_SHIFT) + index);
 		if (!buffer) {
 			pr_err("Cache fault.\n");
@@ -313,19 +319,17 @@ void dmz_write_cache(struct dmz_metadata *zmd, unsigned long lba, unsigned long 
 		}
 
 		if (tail && zmd->cache_size >= DMZ_MAP_CACHE_SIZE) {
-			map->block_id = pba;
-			wait_write(zmd, (META_ZONE_ID << DMZ_ZONE_NR_BLOCKS_SHIFT) + index, buffer);
+			// 更新tail映射
+			unsigned long buffer = wait_read(zmd, (META_ZONE_ID << DMZ_ZONE_NR_BLOCKS_SHIFT) + tindex);
+			if (!buffer) {
+				pr_err("Cache fault.\n");
+				return;
+			}
+			struct dmz_map *map = (struct dmz_map *)(buffer + toffset);
 
-			dmz_lock_metadata(zmd);
-
-			zmd->cache_tail = tail->prev;
-			if (tail->prev)
-				tail->prev->next = NULL;
-
-			// evict tail
-			radix_tree_delete(cache, lba);
-
-			dmz_unlock_metadata(zmd);
+			map->block_id = tail->pba;
+			wait_write(zmd, (META_ZONE_ID << DMZ_ZONE_NR_BLOCKS_SHIFT) + tindex, buffer);
+			// pr_err("Evict %lx -> %lx\n", tail->lba, tail->pba);
 		} else {
 			free_page(buffer);
 		}
